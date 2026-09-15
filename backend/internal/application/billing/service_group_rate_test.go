@@ -1,0 +1,315 @@
+package billing
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+
+	domainbilling "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/billing"
+)
+
+// ---------------------------------------------------------------------------
+// Pure function tests
+// ---------------------------------------------------------------------------
+
+func TestComposeGroupRatePercent(t *testing.T) {
+	discounted := composeGroupRatePercent(billingRateMultiplier{Numerator: 1, Denominator: 1}, 80)
+	if got := applyRateMultiplier(1000, discounted); got != 800 {
+		t.Fatalf("expected 80%% multiplier to yield 800, got %d", got)
+	}
+
+	composed := composeGroupRatePercent(billingRateMultiplier{Numerator: 6, Denominator: 1}, 80)
+	if got := applyRateMultiplier(1000, composed); got != 4800 {
+		t.Fatalf("expected composed 6x * 80%% multiplier to yield 4800, got %d", got)
+	}
+}
+
+func TestComposeGroupRatePercentIdentity(t *testing.T) {
+	base := billingRateMultiplier{Numerator: 2, Denominator: 1}
+	result := composeGroupRatePercent(base, 100)
+	if result != base {
+		t.Fatalf("100%% should return base unchanged, got %+v", result)
+	}
+	result = composeGroupRatePercent(base, 0)
+	if result != base {
+		t.Fatalf("0%% should return base unchanged, got %+v", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Resolver stub
+// ---------------------------------------------------------------------------
+
+type groupRateResolverStub struct {
+	percent         int
+	err             error
+	called          bool
+	receivedModelID uint
+	receivedExtra   []uint
+}
+
+func (s *groupRateResolverStub) GetUserModelGroupRateMultiplierPercent(_ context.Context, _ uint, platformModelID uint, extra []uint) (int, error) {
+	s.called = true
+	s.receivedModelID = platformModelID
+	s.receivedExtra = append([]uint(nil), extra...)
+	return s.percent, s.err
+}
+
+// ---------------------------------------------------------------------------
+// resolveGroupRatePercent unit tests
+// ---------------------------------------------------------------------------
+
+func TestResolveGroupRatePercentNoResolverReturnsIdentity(t *testing.T) {
+	s := &Service{}
+	got, err := s.resolveGroupRatePercent(context.TODO(), 1, 99, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 100 {
+		t.Fatalf("expected identity group rate without resolver, got %d", got)
+	}
+}
+
+func TestResolveGroupRatePercentReturnsErrorOnResolverFailure(t *testing.T) {
+	resolver := &groupRateResolverStub{err: errors.New("db down")}
+	s := &Service{groupRateResolver: resolver}
+	_, err := s.resolveGroupRatePercent(context.Background(), 1, 99, nil)
+	if err == nil {
+		t.Fatal("expected error propagation from resolver")
+	}
+}
+
+func TestResolveGroupRatePercentPassesModelAndSubscriptionGroupID(t *testing.T) {
+	resolver := &groupRateResolverStub{percent: 80}
+	s := &Service{groupRateResolver: resolver}
+	subID := uint(42)
+	_, err := s.resolveGroupRatePercent(context.Background(), 1, 99, &subID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolver.receivedModelID != 99 {
+		t.Fatalf("expected platform model ID 99 passed to resolver, got %d", resolver.receivedModelID)
+	}
+	if len(resolver.receivedExtra) != 1 || resolver.receivedExtra[0] != 42 {
+		t.Fatalf("expected subscription group ID 42 passed as extra, got %v", resolver.receivedExtra)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BuildUsageLedger integration: group rate applied to main ledger
+// ---------------------------------------------------------------------------
+
+func TestBuildUsageLedgerAppliesGroupRateMultiplier(t *testing.T) {
+	repo := &billingRepositoryStub{
+		mode: "usage",
+		pricing: &domainbilling.ModelPricing{
+			PlatformModelName:      "gpt-test",
+			Currency:               "USD",
+			PricingMode:            domainbilling.PricingModeToken,
+			InputNanousdPerMTokens: 1_000_000_000,
+		},
+	}
+	service := NewService(repo)
+	service.SetGroupRateMultiplierResolver(&groupRateResolverStub{percent: 80})
+
+	ledger, err := service.BuildUsageLedger(context.Background(), UsagePricingInput{
+		UserID:            1,
+		PlatformModelName: "gpt-test",
+		InputTokens:       1_000_000,
+	})
+	if err != nil {
+		t.Fatalf("BuildUsageLedger: %v", err)
+	}
+	// 1M tokens * 1_000_000_000 / 1M * 0.8 = 800_000_000
+	if ledger.BilledNanousd != 800_000_000 {
+		t.Fatalf("expected 80%% group rate, got billed=%d (want 800000000)", ledger.BilledNanousd)
+	}
+
+	var snapshot map[string]any
+	if err := json.Unmarshal([]byte(ledger.PricingSnapshotJSON), &snapshot); err != nil {
+		t.Fatalf("unmarshal snapshot: %v", err)
+	}
+	if snapshot["rate_multiplier"] != 0.8 {
+		t.Fatalf("expected rate_multiplier=0.8, got %v", snapshot["rate_multiplier"])
+	}
+}
+
+func TestBuildUsageLedgerResolvesGroupRateByPlatformModelID(t *testing.T) {
+	repo := &billingRepositoryStub{
+		mode: "usage",
+		pricing: &domainbilling.ModelPricing{
+			PlatformModelName:      "gpt-test",
+			Currency:               "USD",
+			PricingMode:            domainbilling.PricingModeToken,
+			InputNanousdPerMTokens: 1_000_000_000,
+		},
+	}
+	resolver := &groupRateResolverStub{percent: 100}
+	service := NewService(repo)
+	service.SetGroupRateMultiplierResolver(resolver)
+	service.SetPlatformModelIdentityResolver(modelIdentityResolverStub{identity: PlatformModelIdentity{
+		PlatformModelID:   123,
+		PlatformModelName: "gpt-test",
+	}})
+
+	_, err := service.BuildUsageLedger(context.Background(), UsagePricingInput{
+		UserID:            1,
+		PlatformModelName: "gpt-test",
+		InputTokens:       1_000,
+	})
+	if err != nil {
+		t.Fatalf("BuildUsageLedger: %v", err)
+	}
+	if resolver.receivedModelID != 123 {
+		t.Fatalf("expected group rate lookup to use platform model ID 123, got %d", resolver.receivedModelID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BuildUsageLedger integration: group rate applied to service items
+// ---------------------------------------------------------------------------
+
+func TestBuildUsageLedgerAppliesGroupRateToServiceItems(t *testing.T) {
+	repo := &billingRepositoryStub{
+		mode: "usage",
+		pricing: &domainbilling.ModelPricing{
+			PlatformModelName:       "gpt-test",
+			Currency:                "USD",
+			PricingMode:             domainbilling.PricingModeToken,
+			InputNanousdPerMTokens:  1_000_000_000,
+			OutputNanousdPerMTokens: 2_000_000_000,
+		},
+	}
+	service := NewService(repo)
+	service.SetGroupRateMultiplierResolver(&groupRateResolverStub{percent: 50})
+
+	ledger, err := service.BuildUsageLedger(context.Background(), UsagePricingInput{
+		UserID:            1,
+		PlatformModelName: "gpt-test",
+		ServiceOnly:       true,
+		ServiceItems: []ServiceUsageInput{{
+			ServiceCode:       "context",
+			ServiceName:       "Context",
+			PlatformModelName: "gpt-test",
+			InputTokens:       1_000_000,
+			OutputTokens:      1_000_000,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("BuildUsageLedger: %v", err)
+	}
+	// service item: (1M * 1B + 1M * 2B) / 1M * 0.5 = 1_500_000_000
+	if ledger.BilledNanousd != 1_500_000_000 {
+		t.Fatalf("expected 50%% group rate on service items, got billed=%d (want 1500000000)", ledger.BilledNanousd)
+	}
+
+	var snapshot map[string]any
+	if err := json.Unmarshal([]byte(ledger.PricingSnapshotJSON), &snapshot); err != nil {
+		t.Fatalf("unmarshal snapshot: %v", err)
+	}
+	items, ok := snapshot["service_items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("expected 1 service item, got %v", snapshot["service_items"])
+	}
+	item := items[0].(map[string]any)
+	if item["rate_multiplier"] != 0.5 {
+		t.Fatalf("expected service item rate_multiplier=0.5, got %v", item["rate_multiplier"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BuildUsageLedger: resolver error propagation
+// ---------------------------------------------------------------------------
+
+func TestBuildUsageLedgerReturnsErrorOnGroupResolverFailure(t *testing.T) {
+	repo := &billingRepositoryStub{
+		mode: "usage",
+		pricing: &domainbilling.ModelPricing{
+			PlatformModelName: "gpt-test",
+			Currency:          "USD",
+			PricingMode:       domainbilling.PricingModeToken,
+		},
+	}
+	service := NewService(repo)
+	service.SetGroupRateMultiplierResolver(&groupRateResolverStub{err: errors.New("db connection lost")})
+
+	_, err := service.BuildUsageLedger(context.Background(), UsagePricingInput{
+		UserID:            1,
+		PlatformModelName: "gpt-test",
+		InputTokens:       1_000,
+	})
+	if err == nil {
+		t.Fatal("expected error from group resolver to propagate")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BuildUsageLedger: self mode skips group rate
+// ---------------------------------------------------------------------------
+
+func TestBuildUsageLedgerSelfModeSkipsGroupRate(t *testing.T) {
+	resolver := &groupRateResolverStub{percent: 50}
+	repo := &billingRepositoryStub{mode: "self"}
+	service := NewService(repo)
+	service.SetGroupRateMultiplierResolver(resolver)
+
+	_, err := service.BuildUsageLedger(context.Background(), UsagePricingInput{
+		UserID:            1,
+		PlatformModelName: "gpt-test",
+		InputTokens:       1_000,
+	})
+	if err != nil {
+		t.Fatalf("BuildUsageLedger: %v", err)
+	}
+	if resolver.called {
+		t.Fatal("group rate resolver should not be called in self mode")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BuildUsageLedger: fast mode + group rate composition
+// ---------------------------------------------------------------------------
+
+func TestBuildUsageLedgerComposesGroupRateWithFastMode(t *testing.T) {
+	repo := &billingRepositoryStub{
+		mode: "usage",
+		pricing: &domainbilling.ModelPricing{
+			PlatformModelName:       "claude-opus-4.6",
+			Currency:                "USD",
+			PricingMode:             domainbilling.PricingModeToken,
+			InputNanousdPerMTokens:  1_000_000_000,
+			OutputNanousdPerMTokens: 5_000_000_000,
+		},
+	}
+	service := NewService(repo)
+	service.SetGroupRateMultiplierResolver(&groupRateResolverStub{percent: 80})
+
+	ledger, err := service.BuildUsageLedger(context.Background(), UsagePricingInput{
+		UserID:            1,
+		PlatformModelName: "claude-opus-4.6",
+		ProviderProtocol:  "anthropic_messages",
+		RequestSpeed:      "fast",
+		UsageSpeed:        "fast",
+		InputTokens:       1_000_000,
+		OutputTokens:      1_000_000,
+	})
+	if err != nil {
+		t.Fatalf("BuildUsageLedger: %v", err)
+	}
+	// fast=6x, group=0.8, combined=4.8x
+	// input: 1M * 1B/M * 4.8 = 4_800_000_000
+	// output: 1M * 5B/M * 4.8 = 24_000_000_000
+	// total = 28_800_000_000
+	if ledger.BilledNanousd != 28_800_000_000 {
+		t.Fatalf("expected fast(6x) * group(0.8) = 4.8x billing, got %d (want 28800000000)", ledger.BilledNanousd)
+	}
+
+	var snapshot map[string]any
+	if err := json.Unmarshal([]byte(ledger.PricingSnapshotJSON), &snapshot); err != nil {
+		t.Fatalf("unmarshal snapshot: %v", err)
+	}
+	if snapshot["rate_multiplier"] != 4.8 {
+		t.Fatalf("expected rate_multiplier=4.8, got %v", snapshot["rate_multiplier"])
+	}
+}

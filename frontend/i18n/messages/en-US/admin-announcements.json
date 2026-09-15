@@ -1,0 +1,72 @@
+{
+  "title": "Announcements",
+  "description": "Manage notices, model changes, and operational messages shown after sign-in.",
+  "create": "Create",
+  "edit": "Edit",
+  "delete": "Delete",
+  "enable": "Enable",
+  "disable": "Disable",
+  "deleting": "Deleting",
+  "searchPlaceholder": "Search title or content",
+  "statusFilter": "Status",
+  "allStatuses": "All",
+  "typeFilter": "Type",
+  "allTypes": "All",
+  "pinnedFilter": "Pinned",
+  "allPinned": "All",
+  "createTitle": "Create announcement",
+  "editTitle": "Edit announcement",
+  "dialogDescription": "Write announcement content in Markdown. Updated content is shown again as a new version.",
+  "deleteTitle": "Delete announcement",
+  "deleteDescription": "Deleted announcements are no longer shown and do not affect other user data.",
+  "empty": "No announcements",
+  "previewEmpty": "Preview",
+  "status": {
+    "active": "Active",
+    "inactive": "Inactive"
+  },
+  "pinned": {
+    "yes": "Pinned",
+    "no": "Not pinned"
+  },
+  "types": {
+    "critical": "Critical",
+    "warning": "Warning",
+    "info": "Info",
+    "normal": "Normal",
+    "general": "General"
+  },
+  "columns": {
+    "title": "Announcement",
+    "type": "Type",
+    "pinned": "Pinned",
+    "status": "Status",
+    "priority": "Priority",
+    "window": "Display time"
+  },
+  "fields": {
+    "title": "Title",
+    "priority": "Priority",
+    "type": "Type",
+    "pinned": "Pinned",
+    "status": "Status",
+    "timeRange": "Display time",
+    "alwaysActive": "Always active",
+    "startsAt": "Starts at",
+    "expiresAt": "Expires at",
+    "contentMarkdown": "Content",
+    "preview": "Preview"
+  },
+  "toast": {
+    "loadFailed": "Failed to load announcements",
+    "invalid": "Enter a title and content.",
+    "created": "Announcement created",
+    "createFailed": "Failed to create announcement",
+    "updated": "Announcement updated",
+    "updateFailed": "Failed to update announcement",
+    "priorityInvalid": "Priority must be a number",
+    "statusFailed": "Failed to update status",
+    "deleted": "Announcement deleted",
+    "deleteFailed": "Failed to delete announcement"
+  }
+}

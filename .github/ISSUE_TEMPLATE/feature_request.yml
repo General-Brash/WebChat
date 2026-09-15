@@ -1,0 +1,83 @@
+name: Feature request
+description: Propose a product or technical improvement for DEEIX Chat.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for feature proposals and technical improvements. Keep the request focused and include deployment or compatibility impact when relevant.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Choose the main area this proposal affects.
+      options:
+        - Frontend / UI
+        - Backend / API
+        - Authentication / authorization
+        - Conversations / streaming
+        - Files / RAG / extraction
+        - Model routing / providers
+        - MCP / tools
+        - Billing / payments
+        - Admin console
+        - Deployment / Docker / configuration
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What user, operator, or developer problem should this solve?
+      placeholder: Describe the current limitation and who is affected.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the desired behavior, workflow, API, configuration, or operational change.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe workarounds or other designs you considered.
+    validations:
+      required: false
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility, deployment, or migration impact
+      description: Note whether this affects configuration, Docker deployment, API contracts, database schema, existing conversations, billing, or authentication.
+      placeholder: |
+        Configuration changes:
+        API changes:
+        Database migrations:
+        Deployment changes:
+        Backward compatibility:
+    validations:
+      required: false
+  - type: textarea
+    id: docs
+    attributes:
+      label: Documentation or API contract impact
+      description: List README, Swagger, frontend API types, deployment docs, or admin docs that may need updates.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submit checklist
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: This request is focused on one feature or improvement.
+          required: true
+        - label: I described user-facing, API, configuration, or deployment impact where relevant.
+          required: true

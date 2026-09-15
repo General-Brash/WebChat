@@ -1,0 +1,197 @@
+{
+  "title": "Tools",
+  "sections": {
+    "mcpTools": "MCP tools",
+    "servers": "MCP servers",
+    "tools": "MCP tools"
+  },
+  "fields": {
+    "mcpEnable": {
+      "label": "Enable MCP tools",
+      "description": "Allow users to select enabled MCP tools in conversations."
+    },
+    "toolPrompt": {
+      "label": "MCP tool prompt",
+      "description": "Controls when and how the model calls MCP tools. Leave empty to use the built-in default prompt."
+    },
+    "defaultPromptPlaceholder": "Leave empty to use the built-in default prompt",
+    "maxSelectedTools": {
+      "label": "Selectable tools per message",
+      "description": "Maximum MCP tools a user can select for one message. Default 32, maximum 128."
+    },
+    "maxLLMCalls": {
+      "label": "Max LLM requests",
+      "description": "Total LLM requests allowed in one message, including the first request and final summary. Default 5, minimum 2."
+    },
+    "maxToolCalls": {
+      "label": "Max MCP tool calls",
+      "description": "Total MCP tool calls allowed in one message. Failed calls count toward the limit. Default 8."
+    },
+    "maxConcurrentCalls": {
+      "label": "MCP tool concurrency",
+      "description": "Maximum concurrent MCP tool calls per service instance. Default 8."
+    },
+    "toolTimeout": {
+      "label": "MCP tool timeout",
+      "description": "Maximum wait time for one MCP tool call, in seconds. Default 10."
+    },
+    "toolRetry": {
+      "label": "MCP tool retries",
+      "description": "Retry count after an MCP tool call fails. Default 0."
+    }
+  },
+  "status": {
+    "active": "On",
+    "inactive": "Off",
+    "all": "All",
+    "enabled": "Enabled",
+    "disabled": "Disabled"
+  },
+  "sort": {
+    "customOrder": "Custom order",
+    "nameAsc": "Name A-Z",
+    "nameDesc": "Name Z-A",
+    "statusAsc": "Status",
+    "updatedDesc": "Recently updated",
+    "updatedAsc": "Oldest updated"
+  },
+  "table": {
+    "name": "Name",
+    "url": "URL",
+    "status": "Status",
+    "tools": "Tools",
+    "lastSynced": "Last sync",
+    "tool": "Tool",
+    "description": "Description",
+    "schema": "Schema",
+    "enabled": "Enabled",
+    "emptyServers": "No MCP servers",
+    "emptyTools": "No tools. Sync first.",
+    "emptyFilteredTools": "No matching tools",
+    "noDescription": "No description",
+    "unsynced": "Not synced"
+  },
+  "toolbar": {
+    "searchServers": "Search server name or URL",
+    "searchTools": "Search tool name or description",
+    "add": "Add",
+    "sync": "Sync",
+    "syncTools": "Sync",
+    "editServer": "Edit",
+    "deleteServer": "Delete",
+    "viewTools": "View {name} MCP tools",
+    "toggleServer": "Toggle MCP server {name}",
+    "selectPageTools": "Select page",
+    "selectTool": "Select tool {name}",
+    "editTool": "Edit",
+    "viewSchema": "Schema",
+    "viewToolSchema": "View {name} schema",
+    "toggleTool": "Toggle tool {name}",
+    "activateSelected": "Enable",
+    "deactivateSelected": "Disable",
+    "order": "Order"
+  },
+  "order": {
+    "title": "MCP display order",
+    "description": "Configure how MCP servers and their tools appear in the conversation selector.",
+    "loading": "Loading MCP order",
+    "empty": "No MCP servers to order",
+    "loadFailed": "Failed to load MCP order",
+    "serverHeader": "MCP servers",
+    "toolHeader": "Tools",
+    "itemCount": "{count}",
+    "dragServer": "Drag to reorder MCP server {name}",
+    "dragTool": "Drag to reorder {name}",
+    "statusActive": "Enabled",
+    "statusInactive": "Disabled",
+    "emptyTools": "This server has no tools to order",
+    "saveSuccess": "MCP display order saved",
+    "saveFailed": "Failed to save MCP display order"
+  },
+  "bulkConfirm": {
+    "title": "Confirm bulk action",
+    "description": "Run this bulk action for {count} selected tools.",
+    "confirm": "Confirm",
+    "pending": "Processing"
+  },
+  "syncConfirm": {
+    "title": "Sync MCP tools",
+    "description": "Choose how to handle tool names and descriptions for \"{name}\".",
+    "preserve": "Keep current content",
+    "preserveDescription": "Keep names and descriptions while syncing other tool data",
+    "overwrite": "Use server content",
+    "overwriteDescription": "Sync names and descriptions returned by the MCP server"
+  },
+  "serverDialog": {
+    "createTitle": "Add MCP server",
+    "editTitle": "Edit MCP server",
+    "description": "Configure the MCP Streamable HTTP endpoint and credentials.",
+    "name": "Server name",
+    "namePlaceholder": "Server name",
+    "status": "Server status",
+    "url": "Server URL",
+    "authToken": "Auth token",
+    "authTokenCreatePlaceholder": "Optional",
+    "authTokenEditPlaceholder": "Leave empty to keep unchanged",
+    "headers": "Headers"
+  },
+  "toolDialog": {
+    "title": "Edit MCP tool",
+    "description": "Edit the tool name, description, and optional invocation capabilities.",
+    "displayName": "Display name",
+    "displayNamePlaceholder": "Tool display name",
+    "toolDescription": "Description",
+    "toolDescriptionPlaceholder": "Describe what this tool is useful for",
+    "imageRoutingTitle": "Image attachment processing",
+    "imageRoutingTooltip": "Only for tools that accept image data. The backend calls this tool first and the main model receives only its text result. Map parameters manually from the tool schema; fields are not detected automatically.",
+    "imageArgument": "Image data argument",
+    "imageArgumentTooltip": "Select the string argument in the tool schema that actually receives encoded image data.",
+    "selectImageArgument": "Select image data argument",
+    "noStringArguments": "This tool schema has no string argument for image data, so this capability cannot be enabled.",
+    "schemaArgumentRequired": "Required",
+    "imageEncoding": "Transfer format",
+    "imageEncodingTooltip": "Match the tool contract. Data URLs include a MIME type; raw Base64 contains only encoded data.",
+    "imageEncodingDataURL": "Data URL (includes MIME type)",
+    "imageEncodingBase64": "Raw Base64",
+    "passUserPrompt": "Also pass the user's request",
+    "passUserPromptTooltip": "Send the current user input to the tool as well. Use this for vision tools that need analysis instructions.",
+    "promptArgument": "User request argument",
+    "selectPromptArgument": "Select user request argument",
+    "unmappedRequiredArguments": "Unmapped required arguments: {names}"
+  },
+  "schemaDialog": {
+    "fallbackTitle": "Tool schema",
+    "description": "{name} input parameter JSON Schema",
+    "fallbackDescription": "Input parameter JSON Schema"
+  },
+  "confirm": {
+    "deleteServer": "Delete MCP server \"{name}\"?"
+  },
+  "toast": {
+    "settingsUpdated": "Tool settings updated",
+    "settingsLoadFailed": "Failed to load tool settings",
+    "saveFailed": "Could not save tool settings",
+    "serversLoadFailed": "Failed to load MCP servers",
+    "toolsLoadFailed": "Failed to load MCP tools",
+    "toolsSynced": "MCP tools synced",
+    "toolsSyncFailed": "Failed to sync MCP tools",
+    "serverUpdated": "MCP server updated",
+    "serverCreated": "MCP server created",
+    "serverSaveFailed": "Failed to save MCP server",
+    "serverDeleted": "MCP server deleted",
+    "serverDeleteFailed": "Failed to delete MCP server",
+    "serverStatusUpdated": "MCP server {status}",
+    "serverStatusFailed": "Failed to update MCP server status",
+    "toolStatusFailed": "Failed to update tool status",
+    "selectedToolsEnabled": "Selected tools enabled",
+    "selectedToolsDisabled": "Selected tools disabled",
+    "selectedToolsUpdateFailed": "Failed to update selected tools",
+    "toolUpdated": "Tool updated",
+    "toolSaveFailed": "Failed to save tool",
+    "schemaCopied": "Schema copied",
+    "copyFailed": "Copy failed",
+    "unknownError": "Request failed. Please try again later.",
+    "sessionExpired": "Your session has expired.",
+    "sessionExpiredDescription": "Please sign in again to continue."
+  }
+}

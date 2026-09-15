@@ -1,0 +1,71 @@
+name: Documentation
+description: Report missing, unclear, or outdated documentation.
+title: "[Docs]: "
+labels:
+  - documentation
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Documentation area
+      description: Choose the main documentation area that needs attention.
+      options:
+        - README
+        - README.zh-CN
+        - CONTRIBUTING
+        - SECURITY
+        - Backend docs
+        - Frontend docs
+        - Swagger / API contract
+        - Configuration examples
+        - Docker / deployment
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: location
+    attributes:
+      label: Location
+      description: Link to the page, file, section, or API path that needs a documentation update.
+      placeholder: "README.md#docker-deployment, backend/docs/README.md, /api/v1/..."
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: What is missing, unclear, or outdated?
+      description: Explain the documentation problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Suggested update
+      description: Describe the content, clarification, example, or correction that should be added.
+    validations:
+      required: false
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      description: Who is affected by this documentation issue?
+      options:
+        - New contributors
+        - Frontend developers
+        - Backend developers
+        - Operators / deployers
+        - API consumers
+        - Administrators
+        - End users
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submit checklist
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: I included the specific documentation location when available.
+          required: true
