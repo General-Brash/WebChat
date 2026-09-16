@@ -170,11 +170,3 @@ docker-compose.local.yml
 .idea
 .pnpm-store
 .worktrees/
-
-# User-confirmed publication exclusions
-/config.example.yaml
-/config.full.example.yaml
-/config.sqlite.example.yaml
-/docker-compose.full.yml
-/frontend/.env.example
-.codex/
