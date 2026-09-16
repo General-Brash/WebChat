@@ -1,0 +1,241 @@
+package middleware
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	domainuser "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/user"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/response"
+	"github.com/gin-gonic/gin"
+)
+
+// RateLimiter 封装 HTTP middleware 所需的限流存储能力。
+type RateLimiter interface {
+	AllowSlidingWindow(ctx context.Context, key string, limit int, window time.Duration, ttl time.Duration) (bool, error)
+	AllowFixedWindow(ctx context.Context, keys []string, limit int, ttl time.Duration) (bool, error)
+}
+
+type rateLimitPolicy struct {
+	Name   string
+	Limit  int
+	Window time.Duration
+	TTL    time.Duration
+	// Err 是触发限流时写回客户端的类型化错误，决定错误码与文案。
+	Err error
+}
+
+const (
+	defaultAuthenticatedRateLimitRPM = 60
+	defaultPublicAuthRateLimitRPM    = 30
+	rateLimitWindow                  = time.Minute
+)
+
+// RateLimit 基于用户维度的滑动窗口限流中间件。
+func RateLimit(limiter RateLimiter, runtime *config.Runtime) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if limiter == nil || !rateLimitEnabled(runtime) {
+			c.Next()
+			return
+		}
+
+		userID, exists := c.Get(ContextKeyUserID)
+		if !exists {
+			c.Next()
+			return
+		}
+		role, hasRole := c.Get(ContextKeyUserRole)
+		if roleStr, ok := role.(string); hasRole && ok && domainuser.IsAdminRole(roleStr) {
+			c.Next()
+			return
+		}
+
+		policy := authenticatedRateLimitPolicy(c, authenticatedRateLimitRPM(runtime))
+		key := fmt.Sprintf("ratelimit:user:%v:%s", userID, policy.Name)
+		allowed, err := limiter.AllowSlidingWindow(c.Request.Context(), key, policy.Limit, policy.Window, policy.TTL)
+		if err != nil || allowed {
+			c.Next()
+			return
+		}
+		writeRateLimitError(c, policy)
+	}
+}
+
+// PublicAuthRateLimit 保护公开接口，按 IP、接口与风险等级限流。
+func PublicAuthRateLimit(limiter RateLimiter, runtime *config.Runtime) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if limiter == nil || !rateLimitEnabled(runtime) {
+			c.Next()
+			return
+		}
+
+		clientIP := c.ClientIP()
+		if clientIP == "" {
+			clientIP = "unknown"
+		}
+
+		policy := publicRateLimitPolicy(c, publicAuthRateLimitRPM(runtime))
+		key := fmt.Sprintf("ratelimit:public:%s:%s:ip:%s", policy.Name, normalizedRoutePath(c), clientIP)
+		if policy.Name == "auth_refresh" {
+			key = fmt.Sprintf("ratelimit:token-refresh:ip:%s", clientIP)
+		}
+
+		allowed, err := limiter.AllowFixedWindow(c.Request.Context(), []string{key}, policy.Limit, policy.TTL)
+		if err != nil || allowed {
+			c.Next()
+			return
+		}
+		writeRateLimitError(c, policy)
+	}
+}
+
+func rateLimitEnabled(runtime *config.Runtime) bool {
+	return runtime != nil && runtime.Snapshot().RateLimitEnabled
+}
+
+func authenticatedRateLimitRPM(runtime *config.Runtime) int {
+	if runtime == nil {
+		return defaultAuthenticatedRateLimitRPM
+	}
+	if value := runtime.Snapshot().RateLimitRPM; value > 0 {
+		return value
+	}
+	return defaultAuthenticatedRateLimitRPM
+}
+
+func publicAuthRateLimitRPM(runtime *config.Runtime) int {
+	if runtime == nil {
+		return defaultPublicAuthRateLimitRPM
+	}
+	if value := runtime.Snapshot().PublicAuthRateLimitRPM; value > 0 {
+		return value
+	}
+	return defaultPublicAuthRateLimitRPM
+}
+
+func authenticatedRateLimitPolicy(c *gin.Context, baseRPM int) rateLimitPolicy {
+	route := normalizedRoutePath(c)
+	method := c.Request.Method
+
+	switch {
+	case isMediaGenerationRoute(method, route):
+		return newRateLimitPolicy("media_generation", atLeast(baseRPM/2, 30), errRateLimitExceeded)
+	case isMessageGenerationRoute(method, route):
+		return newRateLimitPolicy("message_generation", atLeast(baseRPM, defaultAuthenticatedRateLimitRPM), errRateLimitExceeded)
+	case isFileUploadRoute(method, route):
+		return newRateLimitPolicy("file_upload", atLeast(baseRPM*2, 120), errRateLimitExceeded)
+	case isPollingRoute(method, route):
+		return newRateLimitPolicy("polling", atLeast(baseRPM*10, 600), errRateLimitExceeded)
+	case method == http.MethodGet:
+		return newRateLimitPolicy("read", atLeast(baseRPM*10, 600), errRateLimitExceeded)
+	case method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch || method == http.MethodDelete:
+		return newRateLimitPolicy("write", atLeast(baseRPM*4, 240), errRateLimitExceeded)
+	default:
+		return newRateLimitPolicy("general", atLeast(baseRPM*6, 360), errRateLimitExceeded)
+	}
+}
+
+func publicRateLimitPolicy(c *gin.Context, baseRPM int) rateLimitPolicy {
+	route := normalizedRoutePath(c)
+	method := c.Request.Method
+
+	switch {
+	case route == "/auth/refresh":
+		return newRateLimitPolicy("auth_refresh", atLeast(baseRPM*10, 300), errRefreshRateLimitExceeded)
+	case isPublicAuthReadRoute(method, route):
+		return newRateLimitPolicy("public_auth_read", atLeast(baseRPM*10, 300), errRateLimitExceeded)
+	case strings.HasPrefix(route, "/auth/"):
+		return newRateLimitPolicy("public_auth", baseRPM, errAuthRateLimitExceeded)
+	case strings.HasPrefix(route, "/billing/payments/"):
+		return newRateLimitPolicy("payment_callback", atLeast(baseRPM*20, 600), errRateLimitExceeded)
+	case route == "/settings/login-page" || strings.HasPrefix(route, "/shared-conversations/"):
+		return newRateLimitPolicy("public_read", atLeast(baseRPM*20, 600), errRateLimitExceeded)
+	default:
+		return newRateLimitPolicy("public", atLeast(baseRPM*10, 300), errRateLimitExceeded)
+	}
+}
+
+func newRateLimitPolicy(name string, limit int, err error) rateLimitPolicy {
+	if limit <= 0 {
+		limit = defaultAuthenticatedRateLimitRPM
+	}
+	return rateLimitPolicy{
+		Name:   name,
+		Limit:  limit,
+		Window: rateLimitWindow,
+		TTL:    2 * rateLimitWindow,
+		Err:    err,
+	}
+}
+
+func normalizedRoutePath(c *gin.Context) string {
+	route := strings.TrimSpace(c.FullPath())
+	if route == "" && c.Request != nil && c.Request.URL != nil {
+		route = strings.TrimSpace(c.Request.URL.Path)
+	}
+	route = strings.TrimPrefix(route, "/api/v1")
+	if route == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(route, "/") {
+		return "/" + route
+	}
+	return route
+}
+
+func isMessageGenerationRoute(method string, route string) bool {
+	return method == http.MethodPost && (strings.HasSuffix(route, "/messages") ||
+		strings.HasSuffix(route, "/messages/stream") ||
+		strings.HasSuffix(route, "/cancel"))
+}
+
+func isMediaGenerationRoute(method string, route string) bool {
+	return method == http.MethodPost && (strings.Contains(route, "/media/images/") ||
+		strings.Contains(route, "/media/videos/"))
+}
+
+func isFileUploadRoute(method string, route string) bool {
+	return method == http.MethodPost && route == "/files"
+}
+
+func isPollingRoute(method string, route string) bool {
+	if method == http.MethodPost {
+		return route == "/files/processing/statuses" ||
+			route == "/conversation-runs/statuses" ||
+			strings.HasSuffix(route, "/files/processing/statuses")
+	}
+	return method == http.MethodGet && (strings.HasSuffix(route, "/processing") ||
+		strings.HasSuffix(route, "/runs") ||
+		strings.HasSuffix(route, "/stream"))
+}
+
+func isPublicAuthReadRoute(method string, route string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	return route == "/auth/login-options" || strings.HasSuffix(route, "/logo")
+}
+
+func writeRateLimitError(c *gin.Context, policy rateLimitPolicy) {
+	retryAfter := int(policy.Window.Seconds())
+	if retryAfter <= 0 {
+		retryAfter = 60
+	}
+	c.Header("Retry-After", strconv.Itoa(retryAfter))
+	c.Header("X-RateLimit-Limit", strconv.Itoa(policy.Limit))
+	c.Header("X-RateLimit-Remaining", "0")
+	c.Header("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(policy.Window).Unix(), 10))
+	response.ErrorFrom(c, http.StatusTooManyRequests, policy.Err)
+	c.Abort()
+}
+
+func atLeast(value int, minimum int) int {
+	if value < minimum {
+		return minimum
+	}
+	return value
+}

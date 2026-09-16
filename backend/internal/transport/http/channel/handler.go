@@ -1,0 +1,1579 @@
+package channel
+
+import (
+	"errors"
+	"io"
+	"net/http"
+	"strconv"
+
+	appchannel "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/channel"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/pagination"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/response"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/middleware"
+	"github.com/gin-gonic/gin"
+)
+
+// Handler 封装上游与模型管理 HTTP 处理。
+type Handler struct {
+	service *appchannel.Service
+}
+
+func bindModelProbeRequest(c *gin.Context) (ModelProbeRequest, bool) {
+	var req ModelProbeRequest
+	if c.Request == nil || c.Request.ContentLength == 0 {
+		return req, true
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		if errors.Is(err, io.EOF) {
+			return req, true
+		}
+		response.InvalidRequestBody(c, err)
+		return req, false
+	}
+	return req, true
+}
+
+// NewHandler 创建处理器。
+func NewHandler(service *appchannel.Service) *Handler {
+	return &Handler{service: service}
+}
+
+// ---------------------------------------------------------------------------
+// 用户侧模型目录
+// ---------------------------------------------------------------------------
+
+// ListPublicModels godoc
+// @Summary 查询可用模型目录
+// @Description 用户侧查询启用模型目录，用于聊天模型选择器
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} PublicModelListResponseDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /models [get]
+func (h *Handler) ListPublicModels(c *gin.Context) {
+	items, err := h.service.ListActiveModels(c.Request.Context(), middleware.MustUserID(c))
+	if err != nil {
+		response.InternalError(c)
+		return
+	}
+
+	views := make([]PublicModelResponse, 0, len(items))
+	for _, item := range items {
+		views = append(views, toPublicModelResponse(item))
+	}
+	response.Success(c, views)
+}
+
+// ---------------------------------------------------------------------------
+// 上游管理
+// ---------------------------------------------------------------------------
+
+// ListUpstreams godoc
+// @Summary 管理员查询上游列表
+// @Description 管理员分页查询 LLM 上游配置
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param page query int false "页码"
+// @Param page_size query int false "每页数量"
+// @Param q query string false "搜索关键词"
+// @Param status query string false "状态：active/inactive/circuit"
+// @Param compatible query string false "兼容类型"
+// @Param sort query string false "排序：id_desc/id_asc/name_asc/updated_desc"
+// @Success 200 {object} UpstreamListResponseDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams [get]
+func (h *Handler) ListUpstreams(c *gin.Context) {
+	page, pageSize := pagination.Parse(c.Query("page"), c.Query("page_size"))
+	items, total, err := h.service.ListUpstreams(c.Request.Context(), page, pageSize, appchannel.ListUpstreamsInput{
+		Query:      c.Query("q"),
+		Status:     c.Query("status"),
+		Compatible: c.Query("compatible"),
+		Sort:       c.Query("sort"),
+	})
+	if err != nil {
+		response.InternalError(c)
+		return
+	}
+	results := make([]UpstreamResponse, 0, len(items))
+	for _, item := range items {
+		results = append(results, toUpstreamResponse(item))
+	}
+	response.SuccessPage(c, total, results)
+}
+
+// CreateUpstream godoc
+// @Summary 管理员创建上游
+// @Description 管理员新增上游来源配置，内部标识自动分配
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body CreateUpstreamRequest true "上游参数"
+// @Success 200 {object} CreateUpstreamResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 409 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams [post]
+func (h *Handler) CreateUpstream(c *gin.Context) {
+	var req CreateUpstreamRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+
+	item, err := h.service.CreateUpstream(c.Request.Context(), appchannel.CreateUpstreamInput{
+		Kind: req.Kind, Sub2GroupIDs: req.Sub2GroupIDs,
+		Name:                 req.Name,
+		BaseURL:              req.BaseURL,
+		Compatible:           req.Compatible,
+		ProtocolDefaultsJSON: req.ProtocolDefaultsJSON,
+		APIKeys:              req.APIKeys,
+		Status:               req.Status,
+		ConnectTimeoutMS:     req.ConnectTimeoutMS,
+		ReadTimeoutMS:        req.ReadTimeoutMS,
+		StreamIdleTimeoutMS:  req.StreamIdleTimeoutMS,
+		CbFailureThreshold:   req.CbFailureThreshold,
+		CbModelThreshold:     req.CbModelThreshold,
+		CbThresholdLogic:     req.CbThresholdLogic,
+		CbDurationMin:        req.CbDurationMin,
+		CbWindowMin:          req.CbWindowMin,
+		HeadersJSON:          req.HeadersJSON,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, appchannel.ErrInvalidHeadersConfig),
+			errors.Is(err, appchannel.ErrInvalidAPIKeysConfig),
+			errors.Is(err, appchannel.ErrInvalidProtocolDefaultsConfig),
+			errors.Is(err, appchannel.ErrInvalidUpstreamBaseURL),
+			errors.Is(err, appchannel.ErrInvalidJSONConfig):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidAdapter):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidCompatible):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+	response.Success(c, UpstreamDataResponse{Upstream: toUpstreamResponse(*item)})
+}
+
+// UpdateUpstream godoc
+// @Summary 管理员更新上游
+// @Description 管理员更新上游配置（地址、密钥、状态等）
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Param body body UpdateUpstreamRequest true "上游参数"
+// @Success 200 {object} UpdateUpstreamResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id} [patch]
+func (h *Handler) UpdateUpstream(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+
+	var req UpdateUpstreamRequest
+	if err = c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+
+	item, err := h.service.UpdateUpstream(c.Request.Context(), upstreamID, appchannel.UpdateUpstreamInput{
+		Kind: req.Kind, Sub2GroupIDs: req.Sub2GroupIDs,
+		Name:                 req.Name,
+		BaseURL:              req.BaseURL,
+		Compatible:           req.Compatible,
+		ProtocolDefaultsJSON: req.ProtocolDefaultsJSON,
+		APIKeys:              req.APIKeys,
+		AddAPIKeys:           req.AddAPIKeys,
+		DeleteAPIKeyIDs:      req.DeleteAPIKeyIDs,
+		Status:               req.Status,
+		ConnectTimeoutMS:     req.ConnectTimeoutMS,
+		ReadTimeoutMS:        req.ReadTimeoutMS,
+		StreamIdleTimeoutMS:  req.StreamIdleTimeoutMS,
+		CbFailureThreshold:   req.CbFailureThreshold,
+		CbModelThreshold:     req.CbModelThreshold,
+		CbThresholdLogic:     req.CbThresholdLogic,
+		CbDurationMin:        req.CbDurationMin,
+		CbWindowMin:          req.CbWindowMin,
+		HeadersJSON:          req.HeadersJSON,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, appchannel.ErrUpstreamNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamNotFound)
+		case errors.Is(err, appchannel.ErrInvalidHeadersConfig),
+			errors.Is(err, appchannel.ErrInvalidAPIKeysConfig),
+			errors.Is(err, appchannel.ErrInvalidProtocolDefaultsConfig),
+			errors.Is(err, appchannel.ErrInvalidUpstreamBaseURL),
+			errors.Is(err, appchannel.ErrInvalidJSONConfig):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidAdapter):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidCompatible):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+	response.Success(c, UpstreamDataResponse{Upstream: toUpstreamResponse(*item)})
+}
+
+// DeleteUpstream godoc
+// @Summary 管理员删除上游
+// @Description 管理员删除上游配置及其关联路由绑定
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Success 200 {object} response.SuccessDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id} [delete]
+func (h *Handler) DeleteUpstream(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+
+	if err = h.service.DeleteUpstream(c.Request.Context(), upstreamID); err != nil {
+		if errors.Is(err, appchannel.ErrUpstreamNotFound) {
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamNotFound)
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+	response.Success(c, nil)
+}
+
+// BatchDeleteUpstreams godoc
+// @Summary 管理员批量删除上游
+// @Description 管理员批量删除上游及其关联路由绑定，保留模型目录
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body BatchDeleteRequest true "批量删除请求"
+// @Success 200 {object} BatchDeleteResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Router /admin/llm/upstreams/batch-delete [post]
+func (h *Handler) BatchDeleteUpstreams(c *gin.Context) {
+	var req BatchDeleteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+
+	response.Success(c, toBatchDeleteResponse(*h.service.BatchDeleteUpstreams(c.Request.Context(), req.IDs)))
+}
+
+// OpenUpstreamCircuit godoc
+// @Summary 管理员手动触发上游熔断
+// @Description 管理员手动开启上游熔断状态
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Success 200 {object} response.SuccessDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 409 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id}/circuit/open [post]
+func (h *Handler) OpenUpstreamCircuit(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+
+	if err = h.service.OpenUpstreamCircuit(c.Request.Context(), upstreamID); err != nil {
+		if errors.Is(err, appchannel.ErrCircuitBreakerDisabled) {
+			response.ErrorFrom(c, http.StatusConflict, err)
+			return
+		}
+		if errors.Is(err, appchannel.ErrUpstreamNotFound) {
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamNotFound)
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+	response.Success(c, nil)
+}
+
+// ResetUpstreamCircuit godoc
+// @Summary 管理员重置上游熔断
+// @Description 管理员手动清空上游失败计数并关闭熔断状态
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Success 200 {object} ResetUpstreamCircuitResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id}/circuit/reset [post]
+func (h *Handler) ResetUpstreamCircuit(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+
+	if err = h.service.ResetUpstreamCircuit(c.Request.Context(), upstreamID); err != nil {
+		if errors.Is(err, appchannel.ErrUpstreamNotFound) {
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamNotFound)
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+	response.Success(c, CircuitResetResponse{Reset: true})
+}
+
+// ---------------------------------------------------------------------------
+// 上游模型路由绑定
+// ---------------------------------------------------------------------------
+
+// ListUpstreamModels godoc
+// @Summary 管理员查询上游模型路由绑定
+// @Description 管理员分页查询指定上游的路由绑定列表
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Param page query int false "页码"
+// @Param page_size query int false "每页数量"
+// @Param q query string false "搜索关键词"
+// @Param route_status query string false "路由状态：bound/active/inactive"
+// @Param upstream_status query string false "上游模型状态：active/inactive"
+// @Param protocol query string false "接口协议"
+// @Param sort query string false "排序：upstream_asc/upstream_desc/platform_asc/platform_desc/status_asc/protocol_asc"
+// @Success 200 {object} UpstreamModelListResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id}/models [get]
+func (h *Handler) ListUpstreamModels(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+
+	page, pageSize := pagination.Parse(c.Query("page"), c.Query("page_size"))
+	items, total, err := h.service.ListUpstreamModels(c.Request.Context(), upstreamID, page, pageSize, appchannel.ListUpstreamModelsInput{
+		Query:          c.Query("q"),
+		RouteStatus:    c.Query("route_status"),
+		UpstreamStatus: c.Query("upstream_status"),
+		Protocol:       c.Query("protocol"),
+		Sort:           c.Query("sort"),
+	})
+	if err != nil {
+		if errors.Is(err, appchannel.ErrUpstreamNotFound) {
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamNotFound)
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+	results := make([]UpstreamModelResponse, 0, len(items))
+	for _, item := range items {
+		results = append(results, toUpstreamModelResponse(item))
+	}
+	response.SuccessPage(c, total, results)
+}
+
+// UpsertUpstreamModel godoc
+// @Summary 管理员新增或更新上游模型路由绑定
+// @Description 管理员配置平台模型到指定上游真实模型的路由绑定与覆盖请求头
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Param body body UpsertUpstreamModelRequest true "路由绑定参数"
+// @Success 200 {object} UpsertUpstreamModelResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 409 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id}/models [post]
+func (h *Handler) UpsertUpstreamModel(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+
+	var req UpsertUpstreamModelRequest
+	if err = c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+
+	item, err := h.service.UpsertUpstreamModel(c.Request.Context(), upstreamID, appchannel.UpsertUpstreamModelInput{
+		RouteIDs:           req.RouteIDs,
+		PlatformModelName:  req.PlatformModelName,
+		UpstreamModelName:  req.UpstreamModelName,
+		Protocols:          *req.Protocols,
+		KindsJSON:          req.KindsJSON,
+		Status:             req.Status,
+		Priority:           req.Priority,
+		Weight:             req.Weight,
+		Source:             req.Source,
+		CbFailureThreshold: req.CbFailureThreshold,
+		CbDurationMin:      req.CbDurationMin,
+		CbWindowMin:        req.CbWindowMin,
+		HeadersJSON:        req.HeadersJSON,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, appchannel.ErrUpstreamNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamNotFound)
+		case errors.Is(err, appchannel.ErrModelNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errModelNotFound)
+		case errors.Is(err, appchannel.ErrUpstreamModelConflict):
+			response.ErrorFrom(c, http.StatusConflict, errTargetModelAlreadyBoundOnThisUpstream)
+		case errors.Is(err, appchannel.ErrUpstreamModelBindingChanged):
+			response.ErrorWithCode(c, http.StatusConflict, "llm.upstream_model_binding_changed")
+		case errors.Is(err, appchannel.ErrInvalidJSONConfig):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidAdapter):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidRouteProtocolCombination):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidKinds):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidPlatformModelName):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrProtocolRequired):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+	response.Success(c, UpstreamModelDataResponse{Binding: toUpstreamModelResponse(*item)})
+}
+
+// DeleteUpstreamModel godoc
+// @Summary 管理员删除上游模型路由绑定
+// @Description 管理员删除指定上游的路由绑定
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Param route_id path int true "路由绑定ID"
+// @Success 200 {object} response.SuccessDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id}/models/{route_id} [delete]
+func (h *Handler) DeleteUpstreamModel(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+	routeID, err := uintParam(c, "route_id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidRouteID)
+		return
+	}
+
+	if err = h.service.DeleteUpstreamModel(c.Request.Context(), upstreamID, routeID); err != nil {
+		if errors.Is(err, appchannel.ErrUpstreamModelNotFound) {
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamModelNotFound)
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+	response.Success(c, nil)
+}
+
+// DisableUpstreamModel godoc
+// @Summary 管理员停用上游模型路由绑定
+// @Description 管理员停用该路由绑定，后续路由不会选中
+// @Tags llm
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Param route_id path int true "路由绑定ID"
+// @Success 200 {object} response.SuccessDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id}/models/{route_id}/disable [patch]
+func (h *Handler) DisableUpstreamModel(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+	routeID, err := uintParam(c, "route_id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidRouteID)
+		return
+	}
+
+	if err = h.service.DisableUpstreamModel(c.Request.Context(), upstreamID, routeID); err != nil {
+		if errors.Is(err, appchannel.ErrUpstreamModelNotFound) {
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamModelNotFound)
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+	response.Success(c, nil)
+}
+
+// EnableUpstreamModel godoc
+// @Summary 管理员启用上游模型路由绑定
+// @Description 管理员启用该路由绑定，使该上游模型重新参与路由
+// @Tags llm
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Param route_id path int true "路由绑定ID"
+// @Success 200 {object} response.SuccessDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id}/models/{route_id}/enable [patch]
+func (h *Handler) EnableUpstreamModel(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+	routeID, err := uintParam(c, "route_id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidRouteID)
+		return
+	}
+
+	if err = h.service.EnableUpstreamModel(c.Request.Context(), upstreamID, routeID); err != nil {
+		if errors.Is(err, appchannel.ErrUpstreamModelNotFound) {
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamModelNotFound)
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+	response.Success(c, nil)
+}
+
+// BatchDeleteUpstreamModels godoc
+// @Summary 管理员批量删除上游模型路由绑定
+// @Description 管理员批量删除指定上游下的路由绑定，保留模型目录
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Param body body BatchDeleteRequest true "批量删除请求"
+// @Success 200 {object} BatchDeleteResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id}/models/batch-delete [post]
+func (h *Handler) BatchDeleteUpstreamModels(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+
+	var req BatchDeleteRequest
+	if err = c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+
+	response.Success(c, toBatchDeleteResponse(*h.service.BatchDeleteUpstreamModels(c.Request.Context(), upstreamID, req.IDs)))
+}
+
+// OpenUpstreamModelCircuit godoc
+// @Summary 管理员手动触发上游模型路由熔断
+// @Description 管理员手动开启上游模型路由绑定熔断状态
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Param route_id path int true "路由绑定ID"
+// @Success 200 {object} response.SuccessDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 409 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id}/models/{route_id}/circuit/open [post]
+func (h *Handler) OpenUpstreamModelCircuit(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+	routeID, err := uintParam(c, "route_id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidRouteID)
+		return
+	}
+
+	if err = h.service.OpenUpstreamModelCircuit(c.Request.Context(), upstreamID, routeID); err != nil {
+		if errors.Is(err, appchannel.ErrCircuitBreakerDisabled) {
+			response.ErrorFrom(c, http.StatusConflict, err)
+			return
+		}
+		if errors.Is(err, appchannel.ErrUpstreamModelNotFound) {
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamModelNotFound)
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+	response.Success(c, nil)
+}
+
+// ResetUpstreamModelCircuit godoc
+// @Summary 管理员重置上游模型路由熔断
+// @Description 管理员手动清空上游模型路由绑定失败计数并关闭熔断状态
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Param route_id path int true "路由绑定ID"
+// @Success 200 {object} ResetUpstreamCircuitResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id}/models/{route_id}/circuit/reset [post]
+func (h *Handler) ResetUpstreamModelCircuit(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+	routeID, err := uintParam(c, "route_id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidRouteID)
+		return
+	}
+
+	if err = h.service.ResetUpstreamModelCircuit(c.Request.Context(), upstreamID, routeID); err != nil {
+		if errors.Is(err, appchannel.ErrUpstreamModelNotFound) {
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamModelNotFound)
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+	response.Success(c, CircuitResetResponse{Reset: true})
+}
+
+// TestUpstreamModelRoute godoc
+// @Summary 管理员测试上游模型路由绑定
+// @Description 使用指定路由绑定的当前上游配置执行一次轻量连通性测试；返回结果内的调试信息已脱敏且不包含 Base URL 或密钥
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Param route_id path int true "路由绑定ID"
+// @Param body body ModelProbeRequest false "测试参数"
+// @Success 200 {object} ModelProbeResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id}/models/{route_id}/test [post]
+func (h *Handler) TestUpstreamModelRoute(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+	routeID, err := uintParam(c, "route_id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidRouteID)
+		return
+	}
+	req, ok := bindModelProbeRequest(c)
+	if !ok {
+		return
+	}
+
+	result, err := h.service.TestUpstreamModelRoute(c.Request.Context(), upstreamID, routeID, appchannel.ModelProbeInput{
+		TaskType: req.TaskType,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, appchannel.ErrUpstreamModelNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamModelNotFound)
+		case errors.Is(err, appchannel.ErrUpstreamNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamNotFound)
+		case errors.Is(err, appchannel.ErrModelNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errModelNotFound)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+	response.Success(c, toModelProbeResponse(*result))
+}
+
+// ---------------------------------------------------------------------------
+// 远端模型发现
+// ---------------------------------------------------------------------------
+
+// ListRemoteModels godoc
+// @Summary 管理员预览上游远程模型
+// @Description 调用上游 models 接口，返回可导入模型与目录变更预览，不直接落库
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Success 200 {object} UpstreamRemoteModelsResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 502 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id}/models/remote [get]
+func (h *Handler) ListRemoteModels(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+
+	data, err := h.service.ListRemoteModels(c.Request.Context(), upstreamID)
+	if err != nil {
+		switch {
+		case errors.Is(err, appchannel.ErrUpstreamNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamNotFound)
+		case errors.Is(err, appchannel.ErrNoActiveKey):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrRemoteModelsUnavailable):
+			response.ErrorFrom(c, http.StatusBadGateway, err)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+	response.Success(c, toUpstreamRemoteModelsResponse(*data))
+}
+
+// SyncUpstreamModels godoc
+// @Summary 管理员同步上游模型目录
+// @Description 调用上游 models 接口获取完整目录，原子更新远端管理模型可用状态，不删除平台模型或路由配置
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Param allow_empty query bool false "确认允许空模型目录对账"
+// @Param expected_snapshot query string false "用户确认的远端目录快照标识"
+// @Success 200 {object} SyncUpstreamModelsResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 409 {object} ErrorDoc
+// @Failure 502 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id}/models/sync [post]
+func (h *Handler) SyncUpstreamModels(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+
+	data, err := h.service.SyncUpstreamModels(c.Request.Context(), upstreamID, appchannel.SyncUpstreamModelsInput{
+		AllowEmpty:       c.Query("allow_empty") == "true",
+		ExpectedSnapshot: c.Query("expected_snapshot"),
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, appchannel.ErrUpstreamNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamNotFound)
+		case errors.Is(err, appchannel.ErrNoActiveKey):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrRemoteModelsUnavailable):
+			response.ErrorFrom(c, http.StatusBadGateway, err)
+		case errors.Is(err, appchannel.ErrEmptyRemoteModels):
+			response.ErrorWithCode(c, http.StatusConflict, "llm.remote_models_empty_confirmation_required")
+		case errors.Is(err, appchannel.ErrRemoteModelsSnapshotChanged):
+			response.ErrorWithCode(c, http.StatusConflict, "llm.remote_models_snapshot_changed")
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+	response.Success(c, toSyncUpstreamModelsResponse(*data))
+}
+
+// ImportUpstreamModels godoc
+// @Summary 管理员批量导入上游模型
+// @Description 选择性导入上游模型，支持绑定平台模型与自定义条目
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "上游ID"
+// @Param body body ImportUpstreamModelsRequest true "导入参数"
+// @Success 200 {object} ImportUpstreamModelsResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 502 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/upstreams/{id}/models/import [post]
+func (h *Handler) ImportUpstreamModels(c *gin.Context) {
+	upstreamID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidUpstreamID)
+		return
+	}
+
+	var req ImportUpstreamModelsRequest
+	if err = c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+
+	items := make([]appchannel.ImportUpstreamModelItemInput, 0, len(req.Items))
+	for _, item := range req.Items {
+		items = append(items, appchannel.ImportUpstreamModelItemInput{
+			PlatformModelName: item.PlatformModelName,
+			UpstreamModelName: item.UpstreamModelName,
+			Protocol:          item.Protocol,
+			Protocols:         item.Protocols,
+			KindsJSON:         item.KindsJSON,
+			Status:            item.Status,
+			Priority:          item.Priority,
+		})
+	}
+
+	data, err := h.service.ImportUpstreamModels(c.Request.Context(), upstreamID, appchannel.ImportUpstreamModelsInput{
+		Items:              items,
+		PermissionGroupIDs: req.PermissionGroupIDs,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, appchannel.ErrUpstreamNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamNotFound)
+		case errors.Is(err, appchannel.ErrInvalidPermissionGroupModels):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidAdapter):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidRouteProtocolCombination):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidPlatformModelName):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrNoActiveKey):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrRemoteModelsUnavailable):
+			response.ErrorFrom(c, http.StatusBadGateway, err)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+	response.Success(c, toImportUpstreamModelsResponse(*data))
+}
+
+// ---------------------------------------------------------------------------
+// 模型管理
+// ---------------------------------------------------------------------------
+
+// ListModels godoc
+// @Summary 管理员查询模型目录
+// @Description 管理员分页查询平台模型目录，可按 only_active 过滤
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param page query int false "页码"
+// @Param page_size query int false "每页数量"
+// @Param only_active query bool false "仅查询启用模型"
+// @Param only_available query bool false "仅查询公开且可路由模型"
+// @Param q query string false "搜索关键词"
+// @Param status query string false "状态：active/inactive"
+// @Param vendor query string false "模型厂商"
+// @Param protocol query string false "接口协议"
+// @Param upstream query int false "上游 ID"
+// @Param sort query string false "排序：sortOrder_asc/updated_desc/id_desc/platformModelName_asc/sourceCount_desc"
+// @Success 200 {object} ModelListResponseDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/models [get]
+func (h *Handler) ListModels(c *gin.Context) {
+	page, pageSize := pagination.Parse(c.Query("page"), c.Query("page_size"))
+	onlyActive := c.Query("only_active") == "true"
+	onlyAvailable := c.Query("only_available") == "true"
+	var upstreamID uint
+	if raw := c.Query("upstream"); raw != "" {
+		if parsed, err := strconv.ParseUint(raw, 10, strconv.IntSize); err == nil {
+			upstreamID = uint(parsed)
+		}
+	}
+	items, total, err := h.service.ListModels(c.Request.Context(), page, pageSize, appchannel.ListModelsInput{
+		OnlyActive:    onlyActive,
+		OnlyAvailable: onlyAvailable,
+		Query:         c.Query("q"),
+		Status:        c.Query("status"),
+		Vendor:        c.Query("vendor"),
+		Protocol:      c.Query("protocol"),
+		UpstreamID:    upstreamID,
+		Sort:          c.Query("sort"),
+	})
+	if err != nil {
+		response.InternalError(c)
+		return
+	}
+	results := make([]ModelResponse, 0, len(items))
+	for _, item := range items {
+		results = append(results, toModelResponse(item))
+	}
+	response.SuccessPage(c, total, results)
+}
+
+// CreateModel godoc
+// @Summary 管理员创建模型
+// @Description 管理员新增平台模型目录项
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body CreateModelRequest true "模型参数"
+// @Success 200 {object} CreateModelResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 409 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/models [post]
+func (h *Handler) CreateModel(c *gin.Context) {
+	var req CreateModelRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+
+	item, err := h.service.CreateModel(c.Request.Context(), appchannel.CreateModelInput{
+		PlatformModelName:  req.PlatformModelName,
+		Vendor:             req.Vendor,
+		DisplayGroupID:     req.DisplayGroupID,
+		KindsJSON:          req.KindsJSON,
+		Icon:               req.Icon,
+		CapabilitiesJSON:   req.CapabilitiesJSON,
+		SystemPrompt:       req.SystemPrompt,
+		AccessScope:        req.AccessScope,
+		Status:             req.Status,
+		Description:        req.Description,
+		CbPolicyMode:       req.CbPolicyMode,
+		CbFailureThreshold: req.CbFailureThreshold,
+		CbDurationMin:      req.CbDurationMin,
+		CbWindowMin:        req.CbWindowMin,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, appchannel.ErrDuplicatePlatformModelName):
+			response.ErrorFrom(c, http.StatusConflict, errPlatformModelNameAlreadyExists)
+		case errors.Is(err, appchannel.ErrInvalidJSONConfig):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidModelCapsConfig):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidKinds):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidModelAccessScope):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrSystemPromptTooLong):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidPlatformModelName):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidModelVendor):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrModelVendorNotFound):
+			response.ErrorFrom(c, http.StatusBadRequest, errModelVendorNotFound)
+		case errors.Is(err, appchannel.ErrModelDisplayGroupNotFound):
+			response.ErrorFrom(c, http.StatusBadRequest, errModelDisplayGroupNotFound)
+		case errors.Is(err, appchannel.ErrInvalidModelIconReference),
+			errors.Is(err, appchannel.ErrModelIconAssetNotFound):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+	response.Success(c, ModelDataResponse{Model: toModelResponse(*item)})
+}
+
+// UpdateModel godoc
+// @Summary 管理员更新模型
+// @Description 管理员更新平台模型目录项
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "模型ID"
+// @Param body body UpdateModelRequest true "模型参数"
+// @Success 200 {object} UpdateModelResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/models/{id} [patch]
+func (h *Handler) UpdateModel(c *gin.Context) {
+	modelID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidModelID)
+		return
+	}
+
+	var req UpdateModelRequest
+	if err = c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+
+	item, err := h.service.UpdateModel(c.Request.Context(), modelID, appchannel.UpdateModelInput{
+		PlatformModelName:  req.PlatformModelName,
+		Vendor:             req.Vendor,
+		DisplayGroupID:     req.DisplayGroupID,
+		KindsJSON:          req.KindsJSON,
+		Icon:               req.Icon,
+		CapabilitiesJSON:   req.CapabilitiesJSON,
+		SystemPrompt:       req.SystemPrompt,
+		AccessScope:        req.AccessScope,
+		Status:             req.Status,
+		Description:        req.Description,
+		CbPolicyMode:       req.CbPolicyMode,
+		CbFailureThreshold: req.CbFailureThreshold,
+		CbDurationMin:      req.CbDurationMin,
+		CbWindowMin:        req.CbWindowMin,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, appchannel.ErrModelNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errModelNotFound)
+		case errors.Is(err, appchannel.ErrInvalidJSONConfig):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidModelCapsConfig):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidKinds):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidModelAccessScope):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrSystemPromptTooLong):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidPlatformModelName):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidModelVendor):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrModelVendorNotFound):
+			response.ErrorFrom(c, http.StatusBadRequest, errModelVendorNotFound)
+		case errors.Is(err, appchannel.ErrModelDisplayGroupNotFound):
+			response.ErrorFrom(c, http.StatusBadRequest, errModelDisplayGroupNotFound)
+		case errors.Is(err, appchannel.ErrInvalidModelIconReference),
+			errors.Is(err, appchannel.ErrModelIconAssetNotFound):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+	response.Success(c, ModelDataResponse{Model: toModelResponse(*item)})
+}
+
+// SetModelProtocols godoc
+// @Summary 管理员替换模型全部来源的协议集合
+// @Description 在单个数据库事务中更新平台模型能力类型，并将该模型全部上游绑定替换为指定的完整协议集合
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "模型ID"
+// @Param body body SetModelProtocolsRequest true "完整协议集合与模型能力类型"
+// @Success 200 {object} SetModelProtocolsResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 409 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/models/{id}/protocols [patch]
+func (h *Handler) SetModelProtocols(c *gin.Context) {
+	modelID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidModelID)
+		return
+	}
+
+	var req SetModelProtocolsRequest
+	if err = c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+
+	item, err := h.service.SetModelProtocols(c.Request.Context(), modelID, appchannel.SetModelProtocolsInput{
+		Protocols: req.Protocols,
+		KindsJSON: req.KindsJSON,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, appchannel.ErrModelNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errModelNotFound)
+		case errors.Is(err, appchannel.ErrUpstreamModelNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errModelUpstreamSourcesNotFound)
+		case errors.Is(err, appchannel.ErrUpstreamModelConflict):
+			response.ErrorWithCode(c, http.StatusConflict, "llm.upstream_model_conflict")
+		case errors.Is(err, appchannel.ErrUpstreamModelBindingChanged):
+			response.ErrorWithCode(c, http.StatusConflict, "llm.upstream_model_binding_changed")
+		case errors.Is(err, appchannel.ErrInvalidAdapter):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidRouteProtocolCombination):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidKinds):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrProtocolRequired):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+	response.Success(c, ModelDataResponse{Model: toModelResponse(*item)})
+}
+
+// ReorderModels godoc
+// @Summary 管理员调整模型顺序
+// @Description 管理员调整平台模型在用户侧模型选择器中的展示顺序
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body ReorderModelsRequest true "模型 ID 顺序"
+// @Success 200 {object} response.SuccessDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/models/order [post]
+func (h *Handler) ReorderModels(c *gin.Context) {
+	var req ReorderModelsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+
+	if err := h.service.ReorderModels(c.Request.Context(), req.ModelIDs); err != nil {
+		switch {
+		case errors.Is(err, appchannel.ErrInvalidModelOrder):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrModelNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errModelNotFound)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+	response.Success(c, nil)
+}
+
+// DeleteModel godoc
+// @Summary 管理员删除模型
+// @Description 管理员删除平台模型目录项及其关联路由绑定
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "模型ID"
+// @Success 200 {object} response.SuccessDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/models/{id} [delete]
+func (h *Handler) DeleteModel(c *gin.Context) {
+	modelID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidModelID)
+		return
+	}
+
+	if err = h.service.DeleteModel(c.Request.Context(), modelID); err != nil {
+		if errors.Is(err, appchannel.ErrModelNotFound) {
+			response.ErrorFrom(c, http.StatusNotFound, errModelNotFound)
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+	response.Success(c, nil)
+}
+
+// BatchDeleteModels godoc
+// @Summary 管理员批量删除模型
+// @Description 管理员批量删除模型目录及其关联路由绑定，保留上游
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body BatchDeleteRequest true "批量删除请求"
+// @Success 200 {object} BatchDeleteResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Router /admin/llm/models/batch-delete [post]
+func (h *Handler) BatchDeleteModels(c *gin.Context) {
+	var req BatchDeleteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+
+	response.Success(c, toBatchDeleteResponse(*h.service.BatchDeleteModels(c.Request.Context(), req.IDs)))
+}
+
+// TestModel godoc
+// @Summary 管理员测试平台模型路由
+// @Description 按平台模型当前活跃路由选择一个来源执行轻量连通性测试；返回结果内的调试信息已脱敏且不包含 Base URL 或密钥
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "模型ID"
+// @Param body body ModelProbeRequest false "测试参数"
+// @Success 200 {object} ModelProbeResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/models/{id}/test [post]
+func (h *Handler) TestModel(c *gin.Context) {
+	modelID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidModelID)
+		return
+	}
+	req, ok := bindModelProbeRequest(c)
+	if !ok {
+		return
+	}
+
+	result, err := h.service.TestModel(c.Request.Context(), modelID, appchannel.ModelProbeInput{
+		TaskType: req.TaskType,
+	})
+	if err != nil {
+		if errors.Is(err, appchannel.ErrModelNotFound) {
+			response.ErrorFrom(c, http.StatusNotFound, errModelNotFound)
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+	response.Success(c, toModelProbeResponse(*result))
+}
+
+// TestModelAll godoc
+// @Summary 管理员批量测试平台模型全部路由
+// @Description 按平台模型当前全部匹配的活跃路由并发执行轻量连通性测试；返回结果内的调试信息已脱敏且不包含 Base URL 或密钥
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "模型ID"
+// @Param body body ModelProbeRequest false "测试参数"
+// @Success 200 {object} ModelProbeBatchResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/models/{id}/test-all [post]
+func (h *Handler) TestModelAll(c *gin.Context) {
+	modelID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidModelID)
+		return
+	}
+	req, ok := bindModelProbeRequest(c)
+	if !ok {
+		return
+	}
+
+	result, err := h.service.TestModelAll(c.Request.Context(), modelID, appchannel.ModelProbeInput{
+		TaskType: req.TaskType,
+	})
+	if err != nil {
+		if errors.Is(err, appchannel.ErrModelNotFound) {
+			response.ErrorFrom(c, http.StatusNotFound, errModelNotFound)
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+	response.Success(c, toModelProbeBatchResponse(*result))
+}
+
+// ListModelUpstreamSources godoc
+// @Summary 管理员查询模型上游来源
+// @Description 管理员分页查询指定模型在各上游上的路由来源
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "模型ID"
+// @Param page query int false "页码"
+// @Param page_size query int false "每页数量"
+// @Success 200 {object} ModelUpstreamSourceListResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/models/{id}/sources [get]
+func (h *Handler) ListModelUpstreamSources(c *gin.Context) {
+	modelID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidModelID)
+		return
+	}
+
+	page, pageSize := pagination.Parse(c.Query("page"), c.Query("page_size"))
+	items, total, err := h.service.ListModelUpstreamSources(c.Request.Context(), modelID, page, pageSize)
+	if err != nil {
+		if errors.Is(err, appchannel.ErrModelNotFound) {
+			response.ErrorFrom(c, http.StatusNotFound, errModelNotFound)
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+	results := make([]ModelUpstreamSourceResponse, 0, len(items))
+	for _, item := range items {
+		results = append(results, toModelUpstreamSourceResponse(item))
+	}
+	response.SuccessPage(c, total, results)
+}
+
+// BindModelUpstreamSource godoc
+// @Summary 管理员绑定模型上游来源
+// @Description 管理员将当前平台模型绑定到一个已存在的上游模型
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "模型ID"
+// @Param body body BindModelUpstreamSourceRequest true "来源绑定参数"
+// @Success 200 {object} ModelUpstreamSourceDataResponse
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 409 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/models/{id}/sources [post]
+func (h *Handler) BindModelUpstreamSource(c *gin.Context) {
+	modelID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidModelID)
+		return
+	}
+
+	var req BindModelUpstreamSourceRequest
+	if err = c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+
+	item, err := h.service.BindModelUpstreamSource(c.Request.Context(), modelID, appchannel.BindModelUpstreamSourceInput{
+		UpstreamID:         req.UpstreamID,
+		UpstreamModelID:    req.UpstreamModelID,
+		Protocol:           req.Protocol,
+		Status:             req.Status,
+		Priority:           req.Priority,
+		Weight:             req.Weight,
+		CbFailureThreshold: req.CbFailureThreshold,
+		CbDurationMin:      req.CbDurationMin,
+		CbWindowMin:        req.CbWindowMin,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, appchannel.ErrModelNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errModelNotFound)
+		case errors.Is(err, appchannel.ErrUpstreamNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamNotFound)
+		case errors.Is(err, appchannel.ErrUpstreamModelNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamModelNotFound)
+		case errors.Is(err, appchannel.ErrInvalidAdapter):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrProtocolRequired):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidRouteProtocolCombination):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrUpstreamSourceUnavailable):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrUpstreamModelConflict):
+			response.ErrorFrom(c, http.StatusConflict, errTargetModelAlreadyBoundOnThisUpstream)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+	response.Success(c, ModelUpstreamSourceDataResponse{Source: toModelUpstreamSourceResponse(*item)})
+}
+
+// UpdateModelUpstreamSource godoc
+// @Summary 管理员更新模型上游来源
+// @Description 管理员快速启停指定模型在某上游上的来源
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "模型ID"
+// @Param route_id path int true "路由绑定ID"
+// @Param body body UpdateModelUpstreamSourceRequest true "来源参数"
+// @Success 200 {object} UpdateModelUpstreamSourceResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/models/{id}/sources/{route_id} [patch]
+func (h *Handler) UpdateModelUpstreamSource(c *gin.Context) {
+	modelID, err := uintParam(c, "id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidModelID)
+		return
+	}
+	routeID, err := uintParam(c, "route_id")
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidRouteID)
+		return
+	}
+
+	var req UpdateModelUpstreamSourceRequest
+	if err = c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+
+	item, err := h.service.UpdateModelUpstreamSource(c.Request.Context(), modelID, routeID, appchannel.UpdateModelUpstreamSourceInput{
+		Protocol:           req.Protocol,
+		Status:             req.Status,
+		Priority:           req.Priority,
+		Weight:             req.Weight,
+		CbFailureThreshold: req.CbFailureThreshold,
+		CbDurationMin:      req.CbDurationMin,
+		CbWindowMin:        req.CbWindowMin,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, appchannel.ErrModelNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errModelNotFound)
+		case errors.Is(err, appchannel.ErrUpstreamModelNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errUpstreamModelNotFound)
+		case errors.Is(err, appchannel.ErrInvalidAdapter):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrProtocolRequired):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidRouteProtocolCombination):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrUpstreamModelConflict):
+			response.ErrorFrom(c, http.StatusConflict, errTargetModelAlreadyBoundOnThisUpstream)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+	response.Success(c, ModelUpstreamSourceDataResponse{Source: toModelUpstreamSourceResponse(*item)})
+}
+
+// ---------------------------------------------------------------------------
+// 全局设置管理
+// ---------------------------------------------------------------------------
+
+// ListLLMSettings godoc
+// @Summary 管理员查询全局设置
+// @Description 管理员查询 LLM 全局设置列表
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} response.SuccessDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/settings [get]
+func (h *Handler) ListLLMSettings(c *gin.Context) {
+	items, err := h.service.ListLLMSettings(c.Request.Context())
+	if err != nil {
+		response.InternalError(c)
+		return
+	}
+	results := make([]LLMSettingResponse, 0, len(items))
+	for _, item := range items {
+		results = append(results, toLLMSettingResponse(item))
+	}
+	response.Success(c, results)
+}
+
+// UpdateLLMSetting godoc
+// @Summary 管理员更新全局设置
+// @Description 管理员更新指定 LLM 全局设置项
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param key path string true "设置键"
+// @Param body body map[string]string true "设置值 {\"value\": \"...\"}"
+// @Success 200 {object} response.SuccessDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/settings/{key} [patch]
+func (h *Handler) UpdateLLMSetting(c *gin.Context) {
+	key := c.Param("key")
+	if key == "" {
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidSettingKey)
+		return
+	}
+
+	var body struct {
+		Value string `json:"value" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+
+	item, err := h.service.UpdateLLMSetting(c.Request.Context(), key, body.Value)
+	if err != nil {
+		switch {
+		case errors.Is(err, appchannel.ErrLLMSettingNotFound):
+			response.ErrorFrom(c, http.StatusNotFound, errSettingNotFound)
+		case errors.Is(err, appchannel.ErrInvalidSub2GroupPriority):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appchannel.ErrInvalidJSONConfig):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+	response.Success(c, toLLMSettingResponse(*item))
+}
+
+// ---------------------------------------------------------------------------
+// HTTP 辅助
+// ---------------------------------------------------------------------------
+
+func uintParam(c *gin.Context, key string) (uint, error) {
+	value, err := strconv.ParseUint(c.Param(key), 10, strconv.IntSize)
+	if err != nil {
+		return 0, err
+	}
+	return uint(value), nil
+}

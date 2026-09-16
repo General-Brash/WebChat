@@ -1,0 +1,1110 @@
+package auth
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	domainuser "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/user"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/secretbox"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/requestmeta"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/security"
+)
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func TestResolveProviderUserLoginAutoRegistersWhenProviderRegistrationEnabled(t *testing.T) {
+	repo := &providerLoginRepo{}
+	service := newTestService(config.Config{JWTSecret: "test-secret"}, repo, nil)
+	provider := domainuser.IdentityProvider{
+		ID:                  10,
+		Type:                domainuser.IdentityProviderTypeOIDC,
+		Name:                "Acme SSO",
+		Slug:                "acme",
+		LoginEnabled:        true,
+		RegistrationEnabled: true,
+		DefaultRole:         domainuser.RoleUser,
+	}
+
+	userItem, err := service.resolveProviderUser(context.Background(), resolveProviderUserInput{
+		Provider:      provider,
+		Subject:       "sub-1",
+		Email:         "new@example.com",
+		DisplayName:   "New User",
+		EmailVerified: true,
+		ProfileJSON:   `{"sub":"sub-1"}`,
+	})
+	if err != nil {
+		t.Fatalf("expected login to auto-register, got %v", err)
+	}
+	if userItem.ID == 0 {
+		t.Fatalf("expected created user id to be assigned")
+	}
+	if repo.createUserCount != 1 {
+		t.Fatalf("expected one user to be created, got %d", repo.createUserCount)
+	}
+	if len(repo.identities) != 1 {
+		t.Fatalf("expected one identity to be created, got %d", len(repo.identities))
+	}
+	if repo.identities[0].ProviderSubject != "sub-1" || repo.identities[0].UserID != userItem.ID {
+		t.Fatalf("created identity does not match user: %#v", repo.identities[0])
+	}
+}
+
+func TestNormalizeProviderInputAllowsAdminDefaultRole(t *testing.T) {
+	service := newTestService(config.Config{JWTSecret: "test-secret"}, &providerLoginRepo{}, nil)
+
+	provider, err := service.normalizeProviderInput(UpsertIdentityProviderInput{
+		ActorRole:           domainuser.RoleAdmin,
+		Type:                domainuser.IdentityProviderTypeOIDC,
+		Name:                "Acme SSO",
+		ClientID:            "client",
+		ClientSecret:        "secret",
+		DiscoveryURL:        "https://example.com/.well-known/openid-configuration",
+		RegistrationEnabled: boolPtr(true),
+		DefaultRole:         domainuser.RoleAdmin,
+	}, nil)
+	if err != nil {
+		t.Fatalf("expected admin default role to be accepted, got %v", err)
+	}
+	if provider.DefaultRole != domainuser.RoleAdmin {
+		t.Fatalf("expected default role %q, got %q", domainuser.RoleAdmin, provider.DefaultRole)
+	}
+}
+
+func TestNormalizeProviderInputProtectsSuperAdminDefaultRole(t *testing.T) {
+	service := newTestService(config.Config{JWTSecret: "test-secret"}, &providerLoginRepo{}, nil)
+
+	_, err := service.normalizeProviderInput(UpsertIdentityProviderInput{
+		ActorRole:           domainuser.RoleAdmin,
+		Type:                domainuser.IdentityProviderTypeOIDC,
+		Name:                "Acme SSO",
+		ClientID:            "client",
+		ClientSecret:        "secret",
+		DiscoveryURL:        "https://example.com/.well-known/openid-configuration",
+		RegistrationEnabled: boolPtr(true),
+		DefaultRole:         domainuser.RoleSuperAdmin,
+	}, nil)
+	if !errors.Is(err, ErrIdentityProviderSuperAdminDefaultRoleNotAllowed) {
+		t.Fatalf("expected superadmin default role protection, got %v", err)
+	}
+}
+
+func TestNormalizeProviderInputValidatesLogoURL(t *testing.T) {
+	service := newTestService(config.Config{JWTSecret: "test-secret"}, &providerLoginRepo{}, nil)
+
+	cases := []struct {
+		name    string
+		logoURL string
+		wantErr bool
+	}{
+		{name: "https url", logoURL: "https://example.com/logo.svg"},
+		{name: "http url", logoURL: "http://example.com/logo.svg"},
+		{name: "absolute path", logoURL: "/identity-providers/acme.svg"},
+		{name: "url credentials", logoURL: "https://user:password@example.com/logo.svg", wantErr: true},
+		{name: "protocol relative url", logoURL: "//example.com/logo.svg", wantErr: true},
+		{name: "data url", logoURL: "data:image/svg+xml,<svg/>", wantErr: true},
+		{name: "javascript url", logoURL: "javascript:alert(1)", wantErr: true},
+		{name: "relative path", logoURL: "identity-providers/acme.svg", wantErr: true},
+		{name: "backslash path", logoURL: `/\example.svg`, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := service.normalizeProviderInput(UpsertIdentityProviderInput{
+				ActorRole:           domainuser.RoleAdmin,
+				Type:                domainuser.IdentityProviderTypeOIDC,
+				Name:                "Acme SSO",
+				LogoURL:             tc.logoURL,
+				ClientID:            "client",
+				ClientSecret:        "secret",
+				DiscoveryURL:        "https://example.com/.well-known/openid-configuration",
+				RegistrationEnabled: boolPtr(true),
+				DefaultRole:         domainuser.RoleUser,
+			}, nil)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected logo URL %q to be rejected", tc.logoURL)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected logo URL %q to be accepted, got %v", tc.logoURL, err)
+			}
+		})
+	}
+}
+
+func TestNormalizeProviderInputValidatesServerEndpoints(t *testing.T) {
+	service := newTestService(config.Config{JWTSecret: "test-secret"}, &providerLoginRepo{}, nil)
+
+	for _, endpoint := range []string{
+		"file:///etc/passwd",
+		"https://user:password@example.com/token",
+		"http://169.254.169.254/latest/meta-data",
+		"//example.com/token",
+		"not-a-url",
+	} {
+		_, err := service.normalizeProviderInput(UpsertIdentityProviderInput{
+			ActorRole:           domainuser.RoleAdmin,
+			Type:                domainuser.IdentityProviderTypeOAuth2,
+			Name:                "Acme SSO",
+			ClientID:            "client",
+			ClientSecret:        "secret",
+			AuthURL:             "https://example.com/auth",
+			TokenURL:            endpoint,
+			UserInfoURL:         "https://example.com/userinfo",
+			RegistrationEnabled: boolPtr(true),
+		}, nil)
+		if err == nil || !strings.Contains(err.Error(), "provider token url") {
+			t.Fatalf("expected invalid token endpoint %q to be rejected, got %v", endpoint, err)
+		}
+	}
+}
+
+func TestResolveProviderEndpointsRejectsUnsafeExplicitEndpoint(t *testing.T) {
+	service := newTestService(config.Config{}, nil, nil)
+	_, _, _, err := service.resolveProviderEndpoints(context.Background(), domainuser.IdentityProvider{
+		Type:        domainuser.IdentityProviderTypeOAuth2,
+		AuthURL:     "javascript:alert(1)",
+		TokenURL:    "https://example.com/token",
+		UserInfoURL: "https://example.com/userinfo",
+	})
+	if err == nil || !strings.Contains(err.Error(), "provider auth url") {
+		t.Fatalf("expected unsafe explicit auth endpoint to be rejected, got %v", err)
+	}
+}
+
+func TestResolveProviderEndpointsAllowsConfiguredPrivateIssuerInProduction(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/.well-known/openid-configuration" {
+			t.Fatalf("unexpected discovery path %q", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{
+			"authorization_endpoint":"` + serverURLFromRequest(request) + `/auth",
+			"token_endpoint":"` + serverURLFromRequest(request) + `/token",
+			"userinfo_endpoint":"` + serverURLFromRequest(request) + `/userinfo"
+		}`))
+	}))
+	defer server.Close()
+
+	service := newTestService(config.Config{
+		Env:                   "prod",
+		SSRFProtectionEnabled: true,
+	}, nil, nil)
+	authURL, tokenURL, userInfoURL, err := service.resolveProviderEndpoints(context.Background(), domainuser.IdentityProvider{
+		Type:      domainuser.IdentityProviderTypeOIDC,
+		IssuerURL: server.URL,
+	})
+	if err != nil {
+		t.Fatalf("resolve configured private issuer: %v", err)
+	}
+	if authURL != server.URL+"/auth" || tokenURL != server.URL+"/token" || userInfoURL != server.URL+"/userinfo" {
+		t.Fatalf("unexpected discovery endpoints: auth=%q token=%q userinfo=%q", authURL, tokenURL, userInfoURL)
+	}
+}
+
+func TestExchangeProviderCodeRejectsUnconfiguredPrivateDiscoveryOrigin(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{
+			"authorization_endpoint":"https://example.com/auth",
+			"token_endpoint":"http://127.0.0.1:1/token",
+			"userinfo_endpoint":"https://example.com/userinfo"
+		}`))
+	}))
+	defer server.Close()
+
+	const dataKey = "test-data-key"
+	clientSecret, err := secretbox.EncryptString(dataKey, "client-secret")
+	if err != nil {
+		t.Fatalf("encrypt client secret: %v", err)
+	}
+	service := newTestService(config.Config{
+		Env:                   "prod",
+		SSRFProtectionEnabled: true,
+		DataEncryptionKey:     dataKey,
+	}, nil, nil)
+	_, err = service.exchangeProviderCode(context.Background(), domainuser.IdentityProvider{
+		Type:         domainuser.IdentityProviderTypeOIDC,
+		IssuerURL:    server.URL,
+		ClientID:     "client",
+		ClientSecret: clientSecret,
+	}, "code", "https://app.example.com/callback", "")
+	if !errors.Is(err, security.ErrUnsafeOutboundURL) {
+		t.Fatalf("expected cross-origin private token endpoint to remain blocked, got %v", err)
+	}
+}
+
+func TestResolveProviderEndpointsRejectsUnsafeDiscoveryEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{
+			"authorization_endpoint":"javascript:alert(1)",
+			"token_endpoint":"https://example.com/token",
+			"userinfo_endpoint":"https://example.com/userinfo"
+		}`))
+	}))
+	defer server.Close()
+
+	service := newTestService(config.Config{
+		Env:                   "prod",
+		SSRFProtectionEnabled: true,
+	}, nil, nil)
+	_, _, _, err := service.resolveProviderEndpoints(context.Background(), domainuser.IdentityProvider{
+		Type:      domainuser.IdentityProviderTypeOIDC,
+		IssuerURL: server.URL,
+	})
+	if err == nil || !strings.Contains(err.Error(), "provider auth url") {
+		t.Fatalf("expected unsafe discovery endpoint to be rejected, got %v", err)
+	}
+}
+
+func serverURLFromRequest(request *http.Request) string {
+	return "http://" + request.Host
+}
+
+func TestResolveProviderUserAutoRegistrationAddsUsernameSuffixOnCollision(t *testing.T) {
+	repo := &providerLoginRepo{duplicateUsernameAttempts: 1}
+	service := newTestService(config.Config{JWTSecret: "test-secret"}, repo, nil)
+	provider := domainuser.IdentityProvider{
+		ID:                  10,
+		Type:                domainuser.IdentityProviderTypeOIDC,
+		Name:                "Acme SSO",
+		Slug:                "acme",
+		LoginEnabled:        true,
+		RegistrationEnabled: true,
+		DefaultRole:         domainuser.RoleUser,
+	}
+
+	userItem, err := service.resolveProviderUser(context.Background(), resolveProviderUserInput{
+		Provider:      provider,
+		Subject:       "sub-1",
+		Email:         "new@example.com",
+		DisplayName:   "New User",
+		EmailVerified: true,
+		ProfileJSON:   `{"sub":"sub-1"}`,
+	})
+	if err != nil {
+		t.Fatalf("expected login to retry with suffixed username, got %v", err)
+	}
+	if !strings.HasSuffix(userItem.Username, "-2") {
+		t.Fatalf("expected suffixed username, got %q", userItem.Username)
+	}
+	if repo.createUserCount != 1 {
+		t.Fatalf("expected one successful user create, got %d", repo.createUserCount)
+	}
+}
+
+func TestResolveProviderUserLoginRequiresRegistrationEnabledForNewAccount(t *testing.T) {
+	repo := &providerLoginRepo{}
+	service := newTestService(config.Config{JWTSecret: "test-secret"}, repo, nil)
+	provider := domainuser.IdentityProvider{
+		ID:                  10,
+		Type:                domainuser.IdentityProviderTypeOIDC,
+		Name:                "Acme SSO",
+		Slug:                "acme",
+		LoginEnabled:        true,
+		RegistrationEnabled: false,
+		DefaultRole:         domainuser.RoleUser,
+	}
+
+	_, err := service.resolveProviderUser(context.Background(), resolveProviderUserInput{
+		Provider:      provider,
+		Subject:       "sub-1",
+		Email:         "new@example.com",
+		DisplayName:   "New User",
+		EmailVerified: true,
+		ProfileJSON:   `{"sub":"sub-1"}`,
+	})
+	if err == nil || err.Error() != "provider account is not registered" {
+		t.Fatalf("expected not registered error, got %v", err)
+	}
+	if repo.createUserCount != 0 || len(repo.identities) != 0 {
+		t.Fatalf("expected no provisioning, users=%d identities=%d", repo.createUserCount, len(repo.identities))
+	}
+}
+
+func TestResolveProviderUserAutoLinksVerifiedProviderEmailBeforeProvisioning(t *testing.T) {
+	existing := &domainuser.User{
+		ID:     42,
+		Email:  "verified@example.com",
+		Status: domainuser.StatusActive,
+	}
+	repo := &providerLoginRepo{usersByEmail: map[string]*domainuser.User{existing.Email: existing}}
+	service := newTestService(config.Config{JWTSecret: "test-secret", AutoLinkVerifiedEmail: true}, repo, nil)
+	provider := domainuser.IdentityProvider{
+		ID:                  10,
+		Type:                domainuser.IdentityProviderTypeOIDC,
+		Name:                "Acme SSO",
+		Slug:                "acme",
+		LoginEnabled:        true,
+		RegistrationEnabled: false,
+		DefaultRole:         domainuser.RoleUser,
+	}
+
+	userItem, err := service.resolveProviderUser(context.Background(), resolveProviderUserInput{
+		Provider:      provider,
+		Subject:       "sub-1",
+		Email:         existing.Email,
+		DisplayName:   "Verified User",
+		EmailVerified: true,
+		ProfileJSON:   `{"sub":"sub-1"}`,
+	})
+	if err != nil {
+		t.Fatalf("expected verified email to auto-link, got %v", err)
+	}
+	if userItem.ID != existing.ID {
+		t.Fatalf("expected existing user %d, got %d", existing.ID, userItem.ID)
+	}
+	if repo.createUserCount != 0 {
+		t.Fatalf("expected no new user to be created, got %d", repo.createUserCount)
+	}
+	if len(repo.identities) != 1 || repo.identities[0].UserID != existing.ID {
+		t.Fatalf("expected identity linked to existing user, got %#v", repo.identities)
+	}
+}
+
+func TestResolveProviderUserNormalizesProviderEmailBeforeAutoLink(t *testing.T) {
+	existing := &domainuser.User{
+		ID:     42,
+		Email:  "verified@example.com",
+		Status: domainuser.StatusActive,
+	}
+	repo := &providerLoginRepo{usersByEmail: map[string]*domainuser.User{existing.Email: existing}}
+	service := newTestService(config.Config{JWTSecret: "test-secret", AutoLinkVerifiedEmail: true}, repo, nil)
+	provider := domainuser.IdentityProvider{
+		ID:                  10,
+		Type:                domainuser.IdentityProviderTypeOIDC,
+		Name:                "Acme SSO",
+		Slug:                "acme",
+		LoginEnabled:        true,
+		RegistrationEnabled: false,
+		DefaultRole:         domainuser.RoleUser,
+	}
+
+	userItem, err := service.resolveProviderUser(context.Background(), resolveProviderUserInput{
+		Provider:      provider,
+		Subject:       "sub-1",
+		Email:         "Verified@Example.com",
+		DisplayName:   "Verified User",
+		EmailVerified: true,
+		ProfileJSON:   `{"sub":"sub-1"}`,
+	})
+	if err != nil {
+		t.Fatalf("expected normalized provider email to auto-link, got %v", err)
+	}
+	if userItem.ID != existing.ID {
+		t.Fatalf("expected existing user %d, got %d", existing.ID, userItem.ID)
+	}
+	if len(repo.identities) != 1 || repo.identities[0].Email != existing.Email {
+		t.Fatalf("expected normalized linked identity email, got %#v", repo.identities)
+	}
+}
+
+func TestResolveProviderEmailVerifiedUsesConfiguredField(t *testing.T) {
+	provider := domainuser.IdentityProvider{EmailVerifiedField: "verified"}
+	profile := map[string]any{
+		"email":    "verified@example.com",
+		"verified": true,
+	}
+
+	if !resolveProviderEmailVerified(profile, provider) {
+		t.Fatalf("expected configured email verified field to be recognized")
+	}
+}
+
+func TestResolveProviderEmailVerifiedUsesDiscordVerifiedField(t *testing.T) {
+	provider := domainuser.IdentityProvider{Slug: "discord", EmailVerifiedField: "email_verified"}
+	profile := map[string]any{
+		"email":    "verified@example.com",
+		"verified": true,
+	}
+
+	if !resolveProviderEmailVerified(profile, provider) {
+		t.Fatalf("expected discord verified field to be recognized as email verification")
+	}
+}
+
+func TestResolveProviderEmailVerifiedDoesNotUseGenericVerifiedField(t *testing.T) {
+	provider := domainuser.IdentityProvider{Slug: "x", EmailVerifiedField: "email_verified"}
+	profile := map[string]any{
+		"email":    "verified@example.com",
+		"verified": true,
+	}
+
+	if resolveProviderEmailVerified(profile, provider) {
+		t.Fatalf("expected generic verified field to be ignored for non-discord providers")
+	}
+}
+
+func TestCompleteProviderBindAllowsSameAccountWithoutProviderEmailVerification(t *testing.T) {
+	dataKey := "test-data-key"
+	clientSecret, err := secretbox.EncryptString(dataKey, "client-secret")
+	if err != nil {
+		t.Fatalf("encrypt client secret: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/token":
+			_, _ = w.Write([]byte(`{"access_token":"access-token","token_type":"Bearer"}`))
+		case "/userinfo":
+			if r.Header.Get("Authorization") != "Bearer access-token" {
+				t.Fatalf("unexpected authorization header %q", r.Header.Get("Authorization"))
+			}
+			_, _ = w.Write([]byte(`{"sub":"sub-1","email":"user@example.com","name":"Provider User"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	provider := &domainuser.IdentityProvider{
+		ID:                  10,
+		Type:                domainuser.IdentityProviderTypeOAuth2,
+		Name:                "Acme SSO",
+		Slug:                "acme",
+		LoginEnabled:        true,
+		RegistrationEnabled: false,
+		ClientID:            "client",
+		ClientSecret:        clientSecret,
+		AuthURL:             server.URL + "/auth",
+		TokenURL:            server.URL + "/token",
+		UserInfoURL:         server.URL + "/userinfo",
+		SubjectField:        "sub",
+		EmailField:          "email",
+		EmailVerifiedField:  "email_verified",
+		NameField:           "name",
+		AvatarField:         "picture",
+	}
+	repo := &providerLoginRepo{
+		providersBySlug: map[string]*domainuser.IdentityProvider{"acme": provider},
+		usersByEmail: map[string]*domainuser.User{
+			"user@example.com": {ID: 42, Email: "user@example.com", Status: domainuser.StatusActive},
+		},
+	}
+	service := newTestService(config.Config{
+		Env:                    "prod",
+		SSRFProtectionEnabled:  true,
+		CORSAllowOrigin:        "http://localhost",
+		JWTSecret:              "test-secret",
+		DataEncryptionKey:      dataKey,
+		ThirdPartyLoginEnabled: true,
+	}, repo, nil)
+	redirectURI := "http://localhost/auth/callback?provider=acme"
+	codeVerifier := strings.Repeat("a", 43)
+	state, err := service.signProviderState(providerOAuthState{
+		Provider:      "acme",
+		RedirectURI:   redirectURI,
+		Intent:        providerIntentBind,
+		CodeChallenge: providerCodeChallenge(codeVerifier),
+		ExpiresAt:     time.Now().Add(time.Minute).Unix(),
+	})
+	if err != nil {
+		t.Fatalf("sign provider state: %v", err)
+	}
+
+	identity, err := service.CompleteProviderBind(context.Background(), CompleteProviderBindInput{
+		UserID:       42,
+		Slug:         "acme",
+		Code:         "code",
+		State:        state,
+		RedirectURI:  redirectURI,
+		CodeVerifier: codeVerifier,
+		RequestID:    "request-id",
+		AuditContext: requestmeta.SessionAuditContext{},
+	})
+	if err != nil {
+		t.Fatalf("expected manual bind to succeed without provider email verification claim, got %v", err)
+	}
+	if identity.EmailVerified {
+		t.Fatalf("expected linked identity to remain unverified")
+	}
+	if len(repo.identities) != 1 || repo.identities[0].UserID != 42 || repo.identities[0].EmailVerified {
+		t.Fatalf("expected identity linked to current user without verified email, got %#v", repo.identities)
+	}
+}
+
+func TestCompleteProviderLoginAutoLinksGitHubVerifiedPrimaryEmail(t *testing.T) {
+	dataKey := "test-data-key"
+	clientSecret, err := secretbox.EncryptString(dataKey, "client-secret")
+	if err != nil {
+		t.Fatalf("encrypt client secret: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/login/oauth/access_token":
+			_, _ = w.Write([]byte(`{"access_token":"access-token","token_type":"Bearer"}`))
+		case "/user":
+			if r.Header.Get("Authorization") != "Bearer access-token" {
+				t.Fatalf("unexpected user authorization header %q", r.Header.Get("Authorization"))
+			}
+			_, _ = w.Write([]byte(`{"id":123,"login":"octocat","email":null,"avatar_url":"https://example.com/avatar.png"}`))
+		case "/user/emails":
+			if r.Header.Get("Authorization") != "Bearer access-token" {
+				t.Fatalf("unexpected emails authorization header %q", r.Header.Get("Authorization"))
+			}
+			_, _ = w.Write([]byte(`[
+				{"email":"secondary@example.com","primary":false,"verified":true},
+				{"email":"Verified@Example.com","primary":true,"verified":true}
+			]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	provider := &domainuser.IdentityProvider{
+		ID:                  10,
+		Type:                domainuser.IdentityProviderTypeOAuth2,
+		Name:                "GitHub",
+		Slug:                "github",
+		LoginEnabled:        true,
+		RegistrationEnabled: true,
+		ClientID:            "client",
+		ClientSecret:        clientSecret,
+		AuthURL:             server.URL + "/login/oauth/authorize",
+		TokenURL:            server.URL + "/login/oauth/access_token",
+		UserInfoURL:         server.URL + "/user",
+		SubjectField:        "id",
+		EmailField:          "email",
+		EmailVerifiedField:  "email_verified",
+		NameField:           "login",
+		AvatarField:         "avatar_url",
+		DefaultRole:         domainuser.RoleUser,
+	}
+	existing := &domainuser.User{
+		ID:          42,
+		Email:       "verified@example.com",
+		DisplayName: "Existing User",
+		Status:      domainuser.StatusActive,
+		Role:        domainuser.RoleUser,
+	}
+	repo := &providerLoginRepo{
+		providersBySlug: map[string]*domainuser.IdentityProvider{"github": provider},
+		usersByEmail:    map[string]*domainuser.User{existing.Email: existing},
+	}
+	service := newTestService(config.Config{
+		JWTSecret:              "test-secret",
+		DataEncryptionKey:      dataKey,
+		ThirdPartyLoginEnabled: true,
+		AutoLinkVerifiedEmail:  true,
+	}, repo, nil)
+	redirectURI := "http://localhost/auth/callback?provider=github"
+	codeVerifier := strings.Repeat("a", 43)
+	state, err := service.signProviderState(providerOAuthState{
+		Provider:      "github",
+		RedirectURI:   redirectURI,
+		Intent:        providerIntentLogin,
+		CodeChallenge: providerCodeChallenge(codeVerifier),
+		ExpiresAt:     time.Now().Add(time.Minute).Unix(),
+	})
+	if err != nil {
+		t.Fatalf("sign provider state: %v", err)
+	}
+
+	result, err := service.CompleteProviderLogin(context.Background(), CompleteProviderLoginInput{
+		Slug:         "github",
+		Code:         "code",
+		State:        state,
+		RedirectURI:  redirectURI,
+		CodeVerifier: codeVerifier,
+		Intent:       providerIntentLogin,
+		RequestID:    "request-id",
+		AuditContext: requestmeta.SessionAuditContext{},
+	})
+	if err != nil {
+		t.Fatalf("expected github login to auto-link existing email, got %v", err)
+	}
+	if result.User.ID != existing.ID || result.User.Email != existing.Email {
+		t.Fatalf("expected existing user login result, got %#v", result.User)
+	}
+	if repo.createUserCount != 0 {
+		t.Fatalf("expected no new user to be created, got %d", repo.createUserCount)
+	}
+	if len(repo.identities) != 1 || repo.identities[0].UserID != existing.ID || repo.identities[0].Email != existing.Email || !repo.identities[0].EmailVerified {
+		t.Fatalf("expected verified github identity linked to existing user, got %#v", repo.identities)
+	}
+	if repo.createSessionCount != 1 || repo.updateLastLoginUserID != existing.ID {
+		t.Fatalf("expected session and last login for existing user, sessions=%d lastLogin=%d", repo.createSessionCount, repo.updateLastLoginUserID)
+	}
+}
+
+func TestCompleteProviderLoginReturnsErrorWhenGitHubEmailsUnavailable(t *testing.T) {
+	dataKey := "test-data-key"
+	clientSecret, err := secretbox.EncryptString(dataKey, "client-secret")
+	if err != nil {
+		t.Fatalf("encrypt client secret: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/login/oauth/access_token":
+			_, _ = w.Write([]byte(`{"access_token":"access-token","token_type":"Bearer"}`))
+		case "/user":
+			_, _ = w.Write([]byte(`{"id":123,"login":"octocat","email":null}`))
+		case "/user/emails":
+			http.Error(w, `{"message":"Requires user:email scope"}`, http.StatusForbidden)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	provider := &domainuser.IdentityProvider{
+		ID:                  10,
+		Type:                domainuser.IdentityProviderTypeOAuth2,
+		Name:                "GitHub",
+		Slug:                "github",
+		LoginEnabled:        true,
+		RegistrationEnabled: true,
+		ClientID:            "client",
+		ClientSecret:        clientSecret,
+		AuthURL:             server.URL + "/login/oauth/authorize",
+		TokenURL:            server.URL + "/login/oauth/access_token",
+		UserInfoURL:         server.URL + "/user",
+		SubjectField:        "id",
+		EmailField:          "email",
+		EmailVerifiedField:  "email_verified",
+		NameField:           "login",
+		DefaultRole:         domainuser.RoleUser,
+	}
+	repo := &providerLoginRepo{
+		providersBySlug: map[string]*domainuser.IdentityProvider{"github": provider},
+	}
+	service := newTestService(config.Config{
+		JWTSecret:              "test-secret",
+		DataEncryptionKey:      dataKey,
+		ThirdPartyLoginEnabled: true,
+		AutoLinkVerifiedEmail:  true,
+	}, repo, nil)
+	redirectURI := "http://localhost/auth/callback?provider=github"
+	codeVerifier := strings.Repeat("a", 43)
+	state, err := service.signProviderState(providerOAuthState{
+		Provider:      "github",
+		RedirectURI:   redirectURI,
+		Intent:        providerIntentLogin,
+		CodeChallenge: providerCodeChallenge(codeVerifier),
+		ExpiresAt:     time.Now().Add(time.Minute).Unix(),
+	})
+	if err != nil {
+		t.Fatalf("sign provider state: %v", err)
+	}
+
+	_, err = service.CompleteProviderLogin(context.Background(), CompleteProviderLoginInput{
+		Slug:         "github",
+		Code:         "code",
+		State:        state,
+		RedirectURI:  redirectURI,
+		CodeVerifier: codeVerifier,
+		Intent:       providerIntentLogin,
+		RequestID:    "request-id",
+		AuditContext: requestmeta.SessionAuditContext{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "github provider emails failed") {
+		t.Fatalf("expected github email lookup error, got %v", err)
+	}
+	if repo.createUserCount != 0 || len(repo.identities) != 0 {
+		t.Fatalf("expected no user or identity side effect, users=%d identities=%#v", repo.createUserCount, repo.identities)
+	}
+}
+
+func TestResolveProviderUserReturnsStructuredEmailConflict(t *testing.T) {
+	existing := &domainuser.User{
+		ID:     42,
+		Email:  "existing@example.com",
+		Status: domainuser.StatusActive,
+	}
+	repo := &providerLoginRepo{usersByEmail: map[string]*domainuser.User{existing.Email: existing}}
+	service := newTestService(config.Config{JWTSecret: "test-secret", AutoLinkVerifiedEmail: true}, repo, nil)
+	provider := domainuser.IdentityProvider{
+		ID:                  10,
+		Type:                domainuser.IdentityProviderTypeOAuth2,
+		Name:                "Consumer OAuth",
+		Slug:                "consumer",
+		LoginEnabled:        true,
+		RegistrationEnabled: true,
+		DefaultRole:         domainuser.RoleUser,
+	}
+
+	_, err := service.resolveProviderUser(context.Background(), resolveProviderUserInput{
+		Provider:      provider,
+		Subject:       "sub-1",
+		Email:         existing.Email,
+		DisplayName:   "Consumer User",
+		EmailVerified: false,
+		ProfileJSON:   `{"sub":"sub-1"}`,
+	})
+	var conflictErr *ProviderEmailConflictError
+	if !errors.As(err, &conflictErr) {
+		t.Fatalf("expected structured email conflict, got %v", err)
+	}
+	if conflictErr.ProviderSlug != provider.Slug || conflictErr.Email != existing.Email || conflictErr.Action != ProviderEmailConflictActionSignInThenBind {
+		t.Fatalf("unexpected conflict details: %#v", conflictErr)
+	}
+	if repo.createUserCount != 0 || len(repo.identities) != 0 {
+		t.Fatalf("expected no user or identity side effect, users=%d identities=%#v", repo.createUserCount, repo.identities)
+	}
+}
+
+func TestResolveProviderUserRejectsInactiveBoundUserWithoutUpdatingIdentity(t *testing.T) {
+	repo := &providerLoginRepo{
+		usersByID: map[uint]*domainuser.User{
+			42: {ID: 42, Status: domainuser.StatusSuspended},
+		},
+		identities: []domainuser.UserIdentity{
+			{ID: 7, UserID: 42, ProviderID: 10, ProviderSubject: "sub-1"},
+		},
+	}
+	service := newTestService(config.Config{JWTSecret: "test-secret"}, repo, nil)
+	provider := domainuser.IdentityProvider{
+		ID:                  10,
+		Type:                domainuser.IdentityProviderTypeOIDC,
+		Name:                "Acme SSO",
+		Slug:                "acme",
+		LoginEnabled:        true,
+		RegistrationEnabled: true,
+		DefaultRole:         domainuser.RoleUser,
+	}
+
+	_, err := service.resolveProviderUser(context.Background(), resolveProviderUserInput{
+		Provider:      provider,
+		Subject:       "sub-1",
+		Email:         "bound@example.com",
+		DisplayName:   "Bound User",
+		EmailVerified: true,
+		ProfileJSON:   `{"sub":"sub-1"}`,
+	})
+	if err == nil || err.Error() != ErrInvalidCredentials.Error() {
+		t.Fatalf("expected inactive account rejection, got %v", err)
+	}
+	if repo.updateIdentityLoginCount != 0 {
+		t.Fatalf("expected identity login not to be updated, got %d", repo.updateIdentityLoginCount)
+	}
+}
+
+func TestResolveProviderUserRejectsInactiveAutoLinkUserWithoutBinding(t *testing.T) {
+	now := time.Now()
+	existing := &domainuser.User{
+		ID:              42,
+		Email:           "suspended@example.com",
+		EmailVerifiedAt: &now,
+		Status:          domainuser.StatusSuspended,
+	}
+	repo := &providerLoginRepo{usersByEmail: map[string]*domainuser.User{existing.Email: existing}}
+	service := newTestService(config.Config{JWTSecret: "test-secret", AutoLinkVerifiedEmail: true}, repo, nil)
+	provider := domainuser.IdentityProvider{
+		ID:                  10,
+		Type:                domainuser.IdentityProviderTypeOIDC,
+		Name:                "Acme SSO",
+		Slug:                "acme",
+		LoginEnabled:        true,
+		RegistrationEnabled: true,
+		DefaultRole:         domainuser.RoleUser,
+	}
+
+	_, err := service.resolveProviderUser(context.Background(), resolveProviderUserInput{
+		Provider:      provider,
+		Subject:       "sub-1",
+		Email:         existing.Email,
+		DisplayName:   "Suspended User",
+		EmailVerified: true,
+		ProfileJSON:   `{"sub":"sub-1"}`,
+	})
+	if err == nil || err.Error() != ErrInvalidCredentials.Error() {
+		t.Fatalf("expected inactive account rejection, got %v", err)
+	}
+	if len(repo.identities) != 0 {
+		t.Fatalf("expected no auto-link side effect, got %#v", repo.identities)
+	}
+}
+
+func TestResolveProviderUserReturnsIdentityCreateErrorWithoutCleanupCompensation(t *testing.T) {
+	repo := &providerLoginRepo{createIdentityErr: errors.New("duplicate identity")}
+	service := newTestService(config.Config{JWTSecret: "test-secret"}, repo, nil)
+	provider := domainuser.IdentityProvider{
+		ID:                  10,
+		Type:                domainuser.IdentityProviderTypeOIDC,
+		Name:                "Acme SSO",
+		Slug:                "acme",
+		LoginEnabled:        true,
+		RegistrationEnabled: true,
+		DefaultRole:         domainuser.RoleUser,
+	}
+
+	_, err := service.resolveProviderUser(context.Background(), resolveProviderUserInput{
+		Provider:      provider,
+		Subject:       "sub-1",
+		Email:         "new@example.com",
+		DisplayName:   "New User",
+		EmailVerified: true,
+		ProfileJSON:   `{"sub":"sub-1"}`,
+	})
+	if err == nil || err.Error() != "duplicate identity" {
+		t.Fatalf("expected identity creation error, got %v", err)
+	}
+	if repo.createUserCount != 0 {
+		t.Fatalf("expected transaction to avoid standalone user provisioning, got %d", repo.createUserCount)
+	}
+	if repo.deletedUserID != 0 {
+		t.Fatalf("expected no cleanup compensation, got deleted id %d", repo.deletedUserID)
+	}
+}
+
+func TestUnlinkCurrentUserIdentityRejectsLastPasswordlessLoginMethod(t *testing.T) {
+	repo := &providerLoginRepo{
+		credentialsByUserID: map[uint]*domainuser.Credential{
+			42: {UserID: 42, PasswordEnabled: false},
+		},
+		identities: []domainuser.UserIdentity{
+			{ID: 7, UserID: 42, ProviderID: 10, ProviderSubject: "sub-1"},
+		},
+	}
+	service := newTestService(config.Config{JWTSecret: "test-secret"}, repo, nil)
+
+	err := service.UnlinkCurrentUserIdentity(context.Background(), 42, 7)
+	if !errors.Is(err, ErrLastLoginMethodNotAllowed) {
+		t.Fatalf("expected last login method rejection, got %v", err)
+	}
+	if repo.deletedIdentityID != 0 {
+		t.Fatalf("expected identity not to be deleted, got %d", repo.deletedIdentityID)
+	}
+}
+
+func TestUnlinkCurrentUserIdentityAllowsLastIdentityWhenPasswordEnabled(t *testing.T) {
+	repo := &providerLoginRepo{
+		credentialsByUserID: map[uint]*domainuser.Credential{
+			42: {UserID: 42, PasswordEnabled: true},
+		},
+		identities: []domainuser.UserIdentity{
+			{ID: 7, UserID: 42, ProviderID: 10, ProviderSubject: "sub-1"},
+		},
+	}
+	service := newTestService(config.Config{JWTSecret: "test-secret"}, repo, nil)
+
+	if err := service.UnlinkCurrentUserIdentity(context.Background(), 42, 7); err != nil {
+		t.Fatalf("expected unlink to succeed, got %v", err)
+	}
+	if repo.deletedIdentityID != 7 {
+		t.Fatalf("expected identity to be deleted, got %d", repo.deletedIdentityID)
+	}
+}
+
+func TestUnlinkCurrentUserIdentityAllowsOneOfMultiplePasswordlessLoginMethods(t *testing.T) {
+	repo := &providerLoginRepo{
+		credentialsByUserID: map[uint]*domainuser.Credential{
+			42: {UserID: 42, PasswordEnabled: false},
+		},
+		identities: []domainuser.UserIdentity{
+			{ID: 7, UserID: 42, ProviderID: 10, ProviderSubject: "sub-1"},
+			{ID: 8, UserID: 42, ProviderID: 11, ProviderSubject: "sub-2"},
+		},
+	}
+	service := newTestService(config.Config{JWTSecret: "test-secret"}, repo, nil)
+
+	if err := service.UnlinkCurrentUserIdentity(context.Background(), 42, 7); err != nil {
+		t.Fatalf("expected unlink to succeed, got %v", err)
+	}
+	if repo.deletedIdentityID != 7 {
+		t.Fatalf("expected identity to be deleted, got %d", repo.deletedIdentityID)
+	}
+	if len(repo.identities) != 1 || repo.identities[0].ID != 8 {
+		t.Fatalf("expected remaining identity 8, got %#v", repo.identities)
+	}
+}
+
+type providerLoginRepo struct {
+	repository.AuthRepository
+
+	nextUserID                uint
+	nextIdentityID            uint
+	createUserCount           int
+	updateIdentityLoginCount  int
+	deletedUserID             uint
+	deletedIdentityID         uint
+	createIdentityErr         error
+	duplicateUsernameAttempts int
+	createSessionCount        int
+	updateLastLoginUserID     uint
+	usersByID                 map[uint]*domainuser.User
+	usersByEmail              map[string]*domainuser.User
+	credentialsByUserID       map[uint]*domainuser.Credential
+	identities                []domainuser.UserIdentity
+	providersBySlug           map[string]*domainuser.IdentityProvider
+}
+
+func (r *providerLoginRepo) GetIdentityProviderBySlug(ctx context.Context, slug string) (*domainuser.IdentityProvider, error) {
+	if r.providersBySlug == nil {
+		return nil, repository.ErrNotFound
+	}
+	provider, ok := r.providersBySlug[slug]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return provider, nil
+}
+
+func (r *providerLoginRepo) GetUserIdentityByProviderSubject(ctx context.Context, providerID uint, subject string) (*domainuser.UserIdentity, error) {
+	for index := range r.identities {
+		identity := r.identities[index]
+		if identity.ProviderID == providerID && identity.ProviderSubject == subject {
+			return &identity, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (r *providerLoginRepo) GetByID(ctx context.Context, userID uint) (*domainuser.User, error) {
+	if r.usersByID == nil {
+		return nil, repository.ErrNotFound
+	}
+	userItem, ok := r.usersByID[userID]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return userItem, nil
+}
+
+func (r *providerLoginRepo) GetByEmail(ctx context.Context, email string) (*domainuser.User, error) {
+	if r.usersByEmail == nil {
+		return nil, repository.ErrNotFound
+	}
+	userItem, ok := r.usersByEmail[email]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return userItem, nil
+}
+
+func (r *providerLoginRepo) CreateWithCredential(_ context.Context, input repository.CreateWithCredentialInput) error {
+	r.createUserCount++
+	if r.nextUserID == 0 {
+		r.nextUserID = 100
+	}
+	input.User.ID = r.nextUserID
+	r.nextUserID++
+	return nil
+}
+
+func (r *providerLoginRepo) CreateWithCredentialAndIdentity(_ context.Context, input repository.CreateWithCredentialAndIdentityInput) error {
+	if r.createIdentityErr != nil {
+		return r.createIdentityErr
+	}
+	if r.duplicateUsernameAttempts > 0 {
+		r.duplicateUsernameAttempts--
+		return repository.ErrDuplicateUsername
+	}
+	r.createUserCount++
+	if r.nextUserID == 0 {
+		r.nextUserID = 100
+	}
+	input.User.ID = r.nextUserID
+	r.nextUserID++
+	if input.Identity != nil {
+		if r.nextIdentityID == 0 {
+			r.nextIdentityID = 200
+		}
+		input.Identity.ID = r.nextIdentityID
+		input.Identity.UserID = input.User.ID
+		r.nextIdentityID++
+		r.identities = append(r.identities, *input.Identity)
+	}
+	return nil
+}
+
+func (r *providerLoginRepo) CreateUserIdentity(ctx context.Context, identity *domainuser.UserIdentity) (*domainuser.UserIdentity, error) {
+	if r.createIdentityErr != nil {
+		return nil, r.createIdentityErr
+	}
+	if r.nextIdentityID == 0 {
+		r.nextIdentityID = 200
+	}
+	identity.ID = r.nextIdentityID
+	r.nextIdentityID++
+	r.identities = append(r.identities, *identity)
+	return identity, nil
+}
+
+func (r *providerLoginRepo) CreateSession(ctx context.Context, item *domainuser.Session) error {
+	r.createSessionCount++
+	return nil
+}
+
+func (r *providerLoginRepo) UpdateLastLogin(ctx context.Context, userID uint) error {
+	r.updateLastLoginUserID = userID
+	return nil
+}
+
+func (r *providerLoginRepo) ListUserIdentitiesByUserID(ctx context.Context, userID uint) ([]domainuser.UserIdentity, error) {
+	results := make([]domainuser.UserIdentity, 0)
+	for _, identity := range r.identities {
+		if identity.UserID == userID {
+			results = append(results, identity)
+		}
+	}
+	return results, nil
+}
+
+func (r *providerLoginRepo) GetCredentialByUserID(ctx context.Context, userID uint) (*domainuser.Credential, error) {
+	if r.credentialsByUserID == nil {
+		return nil, repository.ErrNotFound
+	}
+	credential, ok := r.credentialsByUserID[userID]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return credential, nil
+}
+
+func (r *providerLoginRepo) GetUserTwoFactorByUserID(ctx context.Context, userID uint) (*domainuser.UserTwoFactor, error) {
+	return nil, repository.ErrNotFound
+}
+
+func (r *providerLoginRepo) DeleteUserIdentity(ctx context.Context, userID uint, identityID uint) error {
+	credential, err := r.GetCredentialByUserID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	identityIndex := -1
+	userIdentityCount := 0
+	for index, identity := range r.identities {
+		if identity.UserID != userID {
+			continue
+		}
+		userIdentityCount++
+		if identity.ID == identityID {
+			identityIndex = index
+		}
+	}
+	if identityIndex < 0 {
+		return repository.ErrNotFound
+	}
+	if !credential.PasswordEnabled && userIdentityCount <= 1 {
+		return repository.ErrConflict
+	}
+	r.deletedIdentityID = identityID
+	r.identities = append(r.identities[:identityIndex], r.identities[identityIndex+1:]...)
+	return nil
+}
+
+func (r *providerLoginRepo) UpdateUserIdentityLogin(ctx context.Context, identityID uint, profileJSON string, providerDisplayName string, email string, emailVerified bool) error {
+	r.updateIdentityLoginCount++
+	return nil
+}
+
+func (r *providerLoginRepo) RecordAuthEvent(ctx context.Context, input repository.AuthEventInput) error {
+	return nil
+}
+
+func (r *providerLoginRepo) DeleteAccountHard(ctx context.Context, userID uint) error {
+	r.deletedUserID = userID
+	return nil
+}

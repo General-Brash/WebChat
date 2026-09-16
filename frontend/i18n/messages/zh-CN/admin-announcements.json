@@ -1,0 +1,72 @@
+{
+  "title": "公告",
+  "description": "维护登录后展示的站点声明、模型调整和运营通知。",
+  "create": "创建",
+  "edit": "编辑",
+  "delete": "删除",
+  "enable": "启用",
+  "disable": "停用",
+  "deleting": "删除中",
+  "searchPlaceholder": "搜索标题或内容",
+  "statusFilter": "状态",
+  "allStatuses": "全部",
+  "typeFilter": "类型",
+  "allTypes": "全部",
+  "pinnedFilter": "置顶",
+  "allPinned": "全部",
+  "createTitle": "创建公告",
+  "editTitle": "编辑公告",
+  "dialogDescription": "使用 Markdown 编写公告内容，更新后用户侧会按新版本重新展示。",
+  "deleteTitle": "删除公告",
+  "deleteDescription": "删除后公告不再展示，此操作不会影响已登录用户的其他数据。",
+  "empty": "暂无公告",
+  "previewEmpty": "预览",
+  "status": {
+    "active": "启用",
+    "inactive": "停用"
+  },
+  "pinned": {
+    "yes": "已置顶",
+    "no": "未置顶"
+  },
+  "types": {
+    "critical": "紧急",
+    "warning": "警告",
+    "info": "提示",
+    "normal": "普通",
+    "general": "常规"
+  },
+  "columns": {
+    "title": "公告",
+    "type": "类型",
+    "pinned": "置顶",
+    "status": "状态",
+    "priority": "优先级",
+    "window": "展示时间"
+  },
+  "fields": {
+    "title": "标题",
+    "priority": "优先级",
+    "type": "类型",
+    "pinned": "置顶",
+    "status": "状态",
+    "timeRange": "展示时间",
+    "alwaysActive": "长期有效",
+    "startsAt": "开始时间",
+    "expiresAt": "过期时间",
+    "contentMarkdown": "内容",
+    "preview": "预览"
+  },
+  "toast": {
+    "loadFailed": "公告加载失败",
+    "invalid": "请填写标题和内容。",
+    "created": "公告已创建",
+    "createFailed": "创建公告失败",
+    "updated": "公告已更新",
+    "updateFailed": "更新公告失败",
+    "priorityInvalid": "优先级必须是数字",
+    "statusFailed": "状态更新失败",
+    "deleted": "公告已删除",
+    "deleteFailed": "删除公告失败"
+  }
+}

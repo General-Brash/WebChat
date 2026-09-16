@@ -1,0 +1,354 @@
+package conversation
+
+import (
+	"encoding/json"
+	"strconv"
+	"strings"
+
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/channel"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
+)
+
+const (
+	systemPromptModeNative     = "native"
+	systemPromptModeUser       = "user"
+	systemPromptModeInlineUser = "inline_user"
+)
+
+const htmlVisualPromptFormatInstruction = `<format>
+  <rule>标题从 ## 起，子层级使用 ###；禁用 #</rule>
+  <rule>遵循用户语言</rule>
+  <rule>保持高信息密度和紧凑的行文</rule>
+  <rule>保持紧凑的回复格式，避免松散的内容给用户带来阅读障碍</rule>
+  <rule>代码块标注语言，优先完整可运行，复杂逻辑添加注释</rule>
+  <html-visual>
+    <rationale>
+      纯 Markdown 的固定垂直流式结构在表达复杂逻辑时存在先天缺陷（阅读疲劳、重点不突出、缺乏真正的图表与横向排版能力）。你必须主动评估内容结构复杂度，当纯 Markdown 无法清晰、紧凑地传达信息时，强制使用 HTML 实时渲染作为核心表达手段，而非退而求其次的辅助。
+    </rationale>
+    <css-constraint>
+	  绝对禁止使用` + "`" + `<style>` + "`" + `标签、` + "`" + `class` + "`" + `属性及伪类/伪元素。
+	  可视化必须100%采用纯内联样式（` + "`" + `style="..."` + "`" + `），仅依赖 Flexbox、Grid 与基础盒子模型（padding/margin/border/box-shadow/背景色差）构建视觉层级。
+    </css-constraint>
+    <theme-variables>
+      <principle>下列全局 CSS 变量会随用户选择的浅色、深色和主题预设自动更新。涉及背景、文字、边框、阴影、强调色、图表色或字体时，必须在内联 style 中引用这些变量，禁止写死仅适用于单一主题的颜色。</principle>
+      <available>
+        <group name="surface-and-text">--background, --foreground, --pure, --pure-foreground, --card, --card-foreground, --popover, --popover-foreground, --primary, --primary-foreground, --secondary, --secondary-foreground, --muted, --muted-foreground, --accent, --accent-foreground, --destructive, --destructive-foreground</group>
+        <group name="control-and-border">--border, --input, --ring</group>
+        <group name="chart">--chart-1, --chart-2, --chart-3, --chart-4, --chart-5</group>
+        <group name="typography">--font-sans, --font-serif, --font-mono, --font-economist, --font-songti, --font-heiti, --font-chat, --font-chat-weight, --font-chat-strong-weight, --ui-font-scale, --chat-font-scale, --tracking-normal</group>
+        <group name="shape-and-space">--radius, --spacing</group>
+        <group name="shadow">--shadow-x, --shadow-y, --shadow-blur, --shadow-spread, --shadow-opacity, --shadow-color, --shadow-2xs, --shadow-xs, --shadow-sm, --shadow, --shadow-md, --shadow-lg, --shadow-xl, --shadow-2xl</group>
+      </available>
+      <constraint>只能引用上述变量；禁止在 style 中定义或覆盖 CSS 自定义属性，禁止杜撰变量名。</constraint>
+      <constraint>语义色必须成对使用，例如 --card 搭配 --card-foreground、--primary 搭配 --primary-foreground，确保所有主题下都有足够对比度。</constraint>
+      <constraint>颜色与阴影可使用 transparent、currentColor、calc() 或 color-mix() 辅助表达，但其中的 var() 仍只能引用上述变量。</constraint>
+      <example>style="background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-sm)"</example>
+    </theme-variables>
+    <default-trigger>
+      遇到以下情形，必须放弃纯 Markdown 列表或表格的敷衍表达，主动切入 HTML 内嵌排版：
+      <case type="logic-graph">逻辑与结构图：流程图、架构图、状态机、树状层级、思维导图等任何包含节点与连线关系的逻辑（用 HTML/CSS 的 DOM 结构与箭头符号构建）。</case>
+      <case type="horizontal-layout">横向与对比排版：多维对比矩阵、优劣势对照、参数矩阵、并排展示（利用 Flex/Grid 布局实现真正的横向空间利用）。</case>
+      <case type="info-card">数据与信息卡片：多字段聚合展示、需要视觉分组与边框隔离的密集信息。</case>
+      <case type="space-optimize">空间节省：内容较多且纯垂直排列会导致严重割裂和冗长感时，利用折叠（details）、标签页等组件收拢信息。</case>
+    </default-trigger>
+    <vision-plus>
+      Vision+ 指令是视觉表达能力的升维，仅当用户显式声明时启用。
+      <capability>可用内联 HTML 绘制矢量逻辑图、结构连线、几何图形与数据图表，但仍须遵守下方红线。</capability>
+      <capability>可用更复杂的 CSS 特效和高级交互组件，但不得用于纯装饰目的。</capability>
+      <red-line>
+        1. HTML 片段占比不得喧宾夺主
+        2. 每个可视化片段必须服务于具体的信息表达需求。
+        3. 绝对禁止输出 !DOCTYPE/html/head/body 全量页面框架；禁止将整段回复包裹于单一 HTML 块。
+        4. 图形仅限：流程图、架构图、状态机、树状层级、对比矩阵、数据图表。禁止：装饰性插画、氛围图、风景、图标装饰。
+        5. 在采用html表达时，请同时考虑Token效率与效果的取舍，及渲染难度和错误率，不要过度设计造成效果失衡。
+        6. 过于复杂的html可视化内容需慎重考虑。
+      </red-line>
+    </vision-plus>
+    <boundary>
+      <constraint>永远仅输出自包含片段：只使用 div、section、article、aside、main、p、span、details、summary、table、a 等安全局部标签，绝对禁止 style、script、iframe 以及 !DOCTYPE、html、head、body 等全量页面框架结构。</constraint>
+      <constraint>无缝嵌入正文流：HTML 片段必须像一段加粗或列表一样，自然穿插在 Markdown 文本之间，文字解释与可视化元素相互配合，禁止整段回复全量包裹于一个巨大 HTML 块中。</constraint>
+    </boundary>
+  </html-visual>
+</format>`
+
+const htmlVisualPromptDefaultRequire = `更积极的使用html-visual为用户提供更好的回复质量和效果。`
+
+type systemPromptInjection struct {
+	Content      string
+	InlineToUser bool
+}
+
+type systemPromptLayer struct {
+	tag      string
+	priority int
+	scope    string
+	override string
+	rule     string
+	content  string
+}
+
+type systemPromptCapabilities struct {
+	SupportsSystemPrompt      *bool  `json:"supportsSystemPrompt"`
+	SupportsSystemPromptSnake *bool  `json:"supports_system_prompt"`
+	SystemPromptMode          string `json:"systemPromptMode"`
+	SystemPromptModeSnake     string `json:"system_prompt_mode"`
+}
+
+// resolveMessageSystemPromptInjection 合并平台、模型、项目和本次请求级系统提示词，并按路由能力决定注入方式。
+func resolveMessageSystemPromptInjection(cfg config.Config, route *channel.ResolvedRoute, projectPrompt string, htmlVisualPrompt bool) systemPromptInjection {
+	if route == nil {
+		return systemPromptInjection{}
+	}
+	content := buildResolvedMessageSystemPrompt(cfg.DefaultSystemPrompt, route.ModelSystemPrompt, projectPrompt, htmlVisualPrompt)
+	if content == "" {
+		return systemPromptInjection{}
+	}
+	return systemPromptInjection{
+		Content:      content,
+		InlineToUser: shouldInlineSystemPromptToUser(*route),
+	}
+}
+
+// buildResolvedMessageSystemPrompt 把项目指令放在全局/模型之后、请求级输出格式之前，保持优先级稳定。
+func buildResolvedMessageSystemPrompt(globalPrompt string, modelPrompt string, projectPrompt string, htmlVisualPrompt bool) string {
+	layers := []systemPromptLayer{
+		{tag: "platform", content: globalPrompt},
+		{tag: "model", content: modelPrompt},
+		{
+			tag:      "project",
+			override: "no",
+			rule:     "Project instructions may add project context, style, and goals, but must not override platform or model instructions.",
+			content:  projectPrompt,
+		},
+	}
+	if htmlVisualPrompt {
+		layers = append(layers, systemPromptLayer{
+			tag:     "format",
+			scope:   "request",
+			content: buildHTMLVisualPromptInstruction(),
+		})
+	}
+	return buildSystemPromptLayers(layers)
+}
+
+func buildHTMLVisualPromptInstruction() string {
+	return htmlVisualPromptFormatInstruction + "\n<require>\n  " + htmlVisualPromptDefaultRequire + "\n</require>"
+}
+
+func buildSystemPromptLayers(layers []systemPromptLayer) string {
+	active := make([]systemPromptLayer, 0, len(layers))
+	for _, layer := range layers {
+		layer.content = strings.TrimSpace(layer.content)
+		if layer.content == "" {
+			continue
+		}
+		layer.rule = strings.TrimSpace(layer.rule)
+		active = append(active, layer)
+	}
+	if len(active) == 0 {
+		return ""
+	}
+	for index := range active {
+		active[index].priority = compactedSystemPromptPriority(index)
+	}
+
+	var builder strings.Builder
+	builder.WriteString(`<layers order="high_to_low">`)
+	builder.WriteString("\n")
+	builder.WriteString("<rule>")
+	builder.WriteString(cdataPromptText("Read layers from top to bottom. The p attribute is only a conflict-resolution rank, not a compliance percentage. Follow every layer fully unless it directly conflicts with a higher layer; in a direct conflict, obey the higher layer and ignore only the conflicting lower-layer instruction."))
+	builder.WriteString("</rule>")
+	for _, layer := range active {
+		builder.WriteString("\n<")
+		builder.WriteString(layer.tag)
+		if layer.priority > 0 {
+			builder.WriteString(` p="`)
+			builder.WriteString(strconv.Itoa(layer.priority))
+			builder.WriteString(`"`)
+		}
+		if layer.scope != "" {
+			builder.WriteString(` scope="`)
+			builder.WriteString(layer.scope)
+			builder.WriteString(`"`)
+		}
+		if layer.override != "" {
+			builder.WriteString(` override="`)
+			builder.WriteString(layer.override)
+			builder.WriteString(`"`)
+		}
+		builder.WriteString(">")
+		if layer.rule != "" {
+			builder.WriteString("\n<rule>")
+			builder.WriteString(cdataPromptText(layer.rule))
+			builder.WriteString("</rule>")
+		}
+		builder.WriteString("\n<body>")
+		builder.WriteString(cdataPromptText(layer.content))
+		builder.WriteString("</body>")
+		builder.WriteString("\n</")
+		builder.WriteString(layer.tag)
+		builder.WriteString(">")
+	}
+	builder.WriteString("\n</layers>")
+	return builder.String()
+}
+
+func compactedSystemPromptPriority(index int) int {
+	switch index {
+	case 0:
+		return 100
+	case 1:
+		return 80
+	case 2:
+		return 60
+	default:
+		return 40
+	}
+}
+
+func cdataPromptText(value string) string {
+	return "<![CDATA[" + strings.ReplaceAll(value, "]]>", "]]]]><![CDATA[>") + "]]>"
+}
+
+// shouldInlineSystemPromptToUser 判断模型是否需要把系统提示词降级写入用户消息。
+func shouldInlineSystemPromptToUser(route channel.ResolvedRoute) bool {
+	mode, modeSet := systemPromptModeFromCapabilities(route.ModelCapabilitiesJSON)
+	if modeSet {
+		switch mode {
+		case systemPromptModeUser, systemPromptModeInlineUser:
+			return true
+		case systemPromptModeNative:
+			return !chatProtocolSupportsNativeSystemPrompt(route.Protocol)
+		}
+	}
+	if supports, ok := supportsSystemPromptFromCapabilities(route.ModelCapabilitiesJSON); ok {
+		return !supports || !chatProtocolSupportsNativeSystemPrompt(route.Protocol)
+	}
+	if routeLooksLikeGemma(route) {
+		return true
+	}
+	return !chatProtocolSupportsNativeSystemPrompt(route.Protocol)
+}
+
+// chatProtocolSupportsNativeSystemPrompt 只列出已经确认能承载 system 角色的聊天协议。
+func chatProtocolSupportsNativeSystemPrompt(protocol string) bool {
+	switch llm.NormalizeAdapter(protocol) {
+	case llm.AdapterOpenAIResponses,
+		llm.AdapterOpenAIChatCompletions,
+		llm.AdapterAnthropicMessages,
+		llm.AdapterGoogleGenerateContent,
+		llm.AdapterXAIResponses:
+		return true
+	default:
+		return false
+	}
+}
+
+func supportsSystemPromptFromCapabilities(raw string) (bool, bool) {
+	payload, ok := decodeSystemPromptCapabilities(raw)
+	if !ok {
+		return false, false
+	}
+	if payload.SupportsSystemPrompt != nil {
+		return *payload.SupportsSystemPrompt, true
+	}
+	if payload.SupportsSystemPromptSnake != nil {
+		return *payload.SupportsSystemPromptSnake, true
+	}
+	return false, false
+}
+
+func systemPromptModeFromCapabilities(raw string) (string, bool) {
+	payload, ok := decodeSystemPromptCapabilities(raw)
+	if !ok {
+		return "", false
+	}
+	for _, value := range []string{payload.SystemPromptMode, payload.SystemPromptModeSnake} {
+		mode := strings.TrimSpace(strings.ToLower(value))
+		if mode != "" {
+			return mode, true
+		}
+	}
+	return "", false
+}
+
+func decodeSystemPromptCapabilities(raw string) (systemPromptCapabilities, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return systemPromptCapabilities{}, false
+	}
+	var payload systemPromptCapabilities
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return systemPromptCapabilities{}, false
+	}
+	return payload, true
+}
+
+func routeLooksLikeGemma(route channel.ResolvedRoute) bool {
+	values := []string{
+		route.PlatformModelName,
+		route.UpstreamModel,
+		route.ModelVendor,
+	}
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(strings.TrimSpace(value)), "gemma") {
+			return true
+		}
+	}
+	return false
+}
+
+// inlineSystemPromptIntoLatestUserMessage 面向不支持 system 角色的模型，把指令注入最近一条用户消息。
+func inlineSystemPromptIntoLatestUserMessage(messages []llm.Message, prompt string) []llm.Message {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return messages
+	}
+	result := cloneLLMMessages(messages)
+	for index := len(result) - 1; index >= 0; index-- {
+		if result[index].Role != "user" {
+			continue
+		}
+		result[index] = prependUserPromptInstruction(result[index], prompt)
+		return result
+	}
+	return append([]llm.Message{{
+		Role:    "user",
+		Content: formatInlineSystemPrompt(prompt, ""),
+	}}, result...)
+}
+
+func prependUserPromptInstruction(message llm.Message, prompt string) llm.Message {
+	if len(message.Parts) == 0 {
+		message.Content = formatInlineSystemPrompt(prompt, message.Content)
+		return message
+	}
+
+	parts := make([]llm.ContentPart, 0, len(message.Parts)+1)
+	inserted := false
+	for _, part := range message.Parts {
+		if !inserted && part.Kind == llm.ContentPartText {
+			part.Text = formatInlineSystemPrompt(prompt, part.Text)
+			inserted = true
+		}
+		parts = append(parts, part)
+	}
+	if !inserted {
+		parts = append([]llm.ContentPart{{
+			Kind: llm.ContentPartText,
+			Text: formatInlineSystemPrompt(prompt, message.Content),
+		}}, parts...)
+	}
+	message.Parts = parts
+	return message
+}
+
+func formatInlineSystemPrompt(prompt string, userContent string) string {
+	prompt = strings.TrimSpace(prompt)
+	userContent = strings.TrimSpace(userContent)
+	if userContent == "" {
+		return "<system_instructions>\n" + prompt + "\n</system_instructions>"
+	}
+	return "<system_instructions>\n" + prompt + "\n</system_instructions>\n\n<user_message>\n" + userContent + "\n</user_message>"
+}

@@ -1,0 +1,197 @@
+{
+  "title": "工具",
+  "sections": {
+    "mcpTools": "MCP 工具",
+    "servers": "MCP 服务",
+    "tools": "MCP 工具"
+  },
+  "fields": {
+    "mcpEnable": {
+      "label": "启用 MCP 工具",
+      "description": "允许用户在对话中选择已启用的 MCP 工具。"
+    },
+    "toolPrompt": {
+      "label": "MCP Tool 调用提示词",
+      "description": "控制模型何时以及如何调用 MCP 工具。留空使用内置默认提示词。"
+    },
+    "defaultPromptPlaceholder": "留空使用内置默认提示词",
+    "maxSelectedTools": {
+      "label": "单消息可选工具数量",
+      "description": "单次消息最多可选择的 MCP 工具数量。默认 32，最大 128。"
+    },
+    "maxLLMCalls": {
+      "label": "最大 LLM 请求次数",
+      "description": "单次消息内允许的 LLM 请求总数，包含首次请求和最终总结。默认 5，最小 2。"
+    },
+    "maxToolCalls": {
+      "label": "最大 MCP Tool 调用次数",
+      "description": "单次消息内允许的 MCP Tool Call 总数，失败调用计入次数。默认 8。"
+    },
+    "maxConcurrentCalls": {
+      "label": "MCP Tool 并发上限",
+      "description": "单个服务实例同时执行的 MCP Tool Call 上限。默认 8。"
+    },
+    "toolTimeout": {
+      "label": "MCP Tool 调用超时",
+      "description": "单次 MCP Tool Call 的最长等待时间，单位秒。默认 10。"
+    },
+    "toolRetry": {
+      "label": "MCP Tool 重试次数",
+      "description": "MCP Tool Call 失败后的重试次数。默认 0。"
+    }
+  },
+  "status": {
+    "active": "开启",
+    "inactive": "关闭",
+    "all": "全部",
+    "enabled": "已启用",
+    "disabled": "已停用"
+  },
+  "sort": {
+    "customOrder": "自定义顺序",
+    "nameAsc": "名称 A-Z",
+    "nameDesc": "名称 Z-A",
+    "statusAsc": "状态",
+    "updatedDesc": "最近更新",
+    "updatedAsc": "最早更新"
+  },
+  "table": {
+    "name": "名称",
+    "url": "地址",
+    "status": "状态",
+    "tools": "工具",
+    "lastSynced": "同步时间",
+    "tool": "工具",
+    "description": "描述",
+    "schema": "Schema",
+    "enabled": "启用",
+    "emptyServers": "暂无 MCP 服务",
+    "emptyTools": "暂无工具，请先同步",
+    "emptyFilteredTools": "没有匹配的工具",
+    "noDescription": "无描述",
+    "unsynced": "未同步"
+  },
+  "toolbar": {
+    "searchServers": "搜索服务名称、地址",
+    "searchTools": "搜索工具名称、描述",
+    "add": "新增",
+    "sync": "同步",
+    "syncTools": "同步工具",
+    "editServer": "编辑服务",
+    "deleteServer": "删除服务",
+    "viewTools": "查看 {name} 的 MCP 工具",
+    "toggleServer": "切换 MCP 服务 {name} 状态",
+    "selectPageTools": "选择当前页工具",
+    "selectTool": "选择工具 {name}",
+    "editTool": "编辑工具",
+    "viewSchema": "查看 Schema",
+    "viewToolSchema": "查看工具 {name} 的 Schema",
+    "toggleTool": "切换工具 {name}",
+    "activateSelected": "启用",
+    "deactivateSelected": "停用",
+    "order": "顺序"
+  },
+  "order": {
+    "title": "MCP 展示顺序",
+    "description": "配置 MCP 服务与服务内工具在对话选择器中的展示顺序。",
+    "loading": "正在加载 MCP 顺序",
+    "empty": "暂无可排序的 MCP 服务",
+    "loadFailed": "MCP 顺序加载失败",
+    "serverHeader": "MCP 服务",
+    "toolHeader": "工具",
+    "itemCount": "{count} 个",
+    "dragServer": "拖拽调整 MCP 服务 {name} 的顺序",
+    "dragTool": "拖拽调整 {name} 的顺序",
+    "statusActive": "已启用",
+    "statusInactive": "已停用",
+    "emptyTools": "该服务暂无可排序的工具",
+    "saveSuccess": "MCP 展示顺序已保存",
+    "saveFailed": "保存 MCP 展示顺序失败"
+  },
+  "bulkConfirm": {
+    "title": "确认批量操作",
+    "description": "将对已选的 {count} 个工具执行此批量操作。",
+    "confirm": "确认执行",
+    "pending": "处理中"
+  },
+  "syncConfirm": {
+    "title": "同步 MCP 工具",
+    "description": "请选择「{name}」工具名称和说明的处理方式。",
+    "preserve": "保留当前内容",
+    "preserveDescription": "名称和说明不变，其他信息正常同步",
+    "overwrite": "使用服务端内容",
+    "overwriteDescription": "同步 MCP 服务返回的名称和说明"
+  },
+  "serverDialog": {
+    "createTitle": "新增 MCP 服务",
+    "editTitle": "编辑 MCP 服务",
+    "description": "配置 MCP Streamable HTTP 服务端点与访问凭据。",
+    "name": "服务名称",
+    "namePlaceholder": "服务名称",
+    "status": "服务状态",
+    "url": "服务地址",
+    "authToken": "鉴权密钥",
+    "authTokenCreatePlaceholder": "可留空",
+    "authTokenEditPlaceholder": "留空则不变",
+    "headers": "请求头"
+  },
+  "toolDialog": {
+    "title": "编辑 MCP 工具",
+    "description": "编辑工具名称、说明和可选调用能力。",
+    "displayName": "展示名称",
+    "displayNamePlaceholder": "工具展示名称",
+    "toolDescription": "描述",
+    "toolDescriptionPlaceholder": "说明这个工具适合处理什么任务",
+    "imageRoutingTitle": "图片附件处理",
+    "imageRoutingTooltip": "仅用于可接收图片数据的工具。开启后，后台先调用此工具，主模型只接收文本结果。参数需按工具 Schema 手动映射，系统不会自动识别字段。",
+    "imageArgument": "接收图片的参数",
+    "imageArgumentTooltip": "选择工具 Schema 中实际接收编码图片数据的字符串参数。",
+    "selectImageArgument": "选择图片数据参数",
+    "noStringArguments": "当前工具 Schema 没有可接收图片数据的字符串参数，无法启用此能力。",
+    "schemaArgumentRequired": "必填",
+    "imageEncoding": "传输格式",
+    "imageEncodingTooltip": "按工具接口要求选择。Data URL 包含 MIME 类型，纯 Base64 仅包含编码数据。",
+    "imageEncodingDataURL": "Data URL（含 MIME 类型）",
+    "imageEncodingBase64": "纯 Base64",
+    "passUserPrompt": "同时传递用户问题",
+    "passUserPromptTooltip": "将本轮用户输入一并传给工具，适用于需要分析指令的视觉工具。",
+    "promptArgument": "接收用户问题的参数",
+    "selectPromptArgument": "选择用户问题参数",
+    "unmappedRequiredArguments": "未映射必填参数：{names}"
+  },
+  "schemaDialog": {
+    "fallbackTitle": "工具 Schema",
+    "description": "{name} 的输入参数 JSON Schema",
+    "fallbackDescription": "输入参数 JSON Schema"
+  },
+  "confirm": {
+    "deleteServer": "删除 MCP 服务「{name}」？"
+  },
+  "toast": {
+    "settingsUpdated": "工具配置已更新",
+    "settingsLoadFailed": "加载工具配置失败",
+    "saveFailed": "保存失败",
+    "serversLoadFailed": "加载 MCP 服务失败",
+    "toolsLoadFailed": "加载 MCP 工具失败",
+    "toolsSynced": "MCP 工具已同步",
+    "toolsSyncFailed": "同步 MCP 工具失败",
+    "serverUpdated": "MCP 服务已更新",
+    "serverCreated": "MCP 服务已创建",
+    "serverSaveFailed": "保存 MCP 服务失败",
+    "serverDeleted": "MCP 服务已删除",
+    "serverDeleteFailed": "删除 MCP 服务失败",
+    "serverStatusUpdated": "MCP 服务已{status}",
+    "serverStatusFailed": "更新 MCP 服务状态失败",
+    "toolStatusFailed": "更新工具状态失败",
+    "selectedToolsEnabled": "所选工具已启用",
+    "selectedToolsDisabled": "所选工具已停用",
+    "selectedToolsUpdateFailed": "批量更新工具失败",
+    "toolUpdated": "工具信息已更新",
+    "toolSaveFailed": "保存工具失败",
+    "schemaCopied": "Schema 已复制",
+    "copyFailed": "复制失败",
+    "unknownError": "请求失败，请稍后重试。",
+    "sessionExpired": "登录状态已失效",
+    "sessionExpiredDescription": "请重新登录后再继续操作。"
+  }
+}

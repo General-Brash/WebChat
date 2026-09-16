@@ -1,0 +1,167 @@
+{
+  "sections": {
+    "conversation": "Conversation settings",
+    "contextManagement": "Context management",
+    "optionPassthrough": "Option passthrough",
+    "dataExport": "Data export"
+  },
+  "defaultModel": {
+    "systemRecommended": "System recommended"
+  },
+  "taskModel": {
+    "follow": "Follow current model"
+  },
+  "policy": {
+    "allowlist": "Allowlist",
+    "denylist": "Denylist",
+    "disabled": "Disabled"
+  },
+  "fields": {
+    "defaultModel": {
+      "label": "New conversation default model",
+      "description": "Used first when users choose System recommended or have no personal default model. Leave empty to fall back to the first available model."
+    },
+    "taskModel": {
+      "label": "Task model",
+      "description": "Chat model used to generate conversation titles and labels."
+    },
+    "defaultSystemPrompt": {
+      "label": "Global default system prompt",
+      "description": "Global behavior instructions for all chat models. Leave empty to inject nothing. Model-level prompts are appended after it.",
+      "placeholder": "Example: keep answers accurate and clear, and follow platform safety requirements."
+    },
+    "contextCompactEnabled": {
+      "label": "Context compression",
+      "description": "Summarize older conversation turns into a rolling context. Users can still opt out in chat settings."
+    },
+    "contextTokenBudget": {
+      "label": "Token budget protection",
+      "description": "Automatically trim history that exceeds the model context budget."
+    },
+    "contextMaxTurns": {
+      "label": "Compression trigger turns",
+      "description": "Trigger context compression when the conversation exceeds this turn count. Set 0 to disable this trigger.",
+      "placeholder": "Trigger turns"
+    },
+    "contextWindowFallbackTokens": {
+      "label": "Default context window",
+      "description": "Used when the model context window cannot be identified.",
+      "placeholder": "Default 128000"
+    },
+    "contextCompactTriggerPercent": {
+      "label": "Compression trigger ratio",
+      "description": "Trigger compression when accumulated context reaches this percentage of the active model's effective input budget. Set 0 to disable the token trigger.",
+      "placeholder": "Default 80"
+    },
+    "contextCompactPreserveTurns": {
+      "label": "Recent turns to preserve",
+      "description": "Recent original turns to keep during compression. Older content is summarized.",
+      "placeholder": "Turns to preserve"
+    },
+    "contextCompactHighlightsPerRole": {
+      "label": "Highlights per role",
+      "description": "Maximum summary highlights retained for each user and assistant role during template compression.",
+      "placeholder": "Highlight count"
+    },
+    "contextCompactSnippetChars": {
+      "label": "Snippet character limit",
+      "description": "Maximum characters retained in one message snippet during template compression.",
+      "placeholder": "Character limit"
+    },
+    "contextArtifactRetentionDays": {
+      "label": "Evidence retention days",
+      "description": "Retention period for context evidence, including RAG results, historical evidence, and tool results. 0 disables automatic expiry.",
+      "placeholder": "Retention days"
+    },
+    "compactAsync": {
+      "label": "Background compression",
+      "description": "Run template or LLM compression after the current response. Results are persisted in the message process trace, with start, completion, and failure recorded in backend logs."
+    },
+    "compactLLM": {
+      "label": "LLM compression",
+      "description": "Call a model to generate semantic summaries. When off, only template summaries are used."
+    },
+    "compactTaskModel": {
+      "label": "Compression model",
+      "description": "Model used to generate compression summaries. Follow current model falls back to the default chat model when the active conversation model is not chat-capable."
+    },
+    "compactMaxFailures": {
+      "label": "Circuit threshold",
+      "description": "Consecutive failure threshold for LLM compression. After reaching it, the system falls back to template summaries.",
+      "placeholder": "Circuit threshold"
+    },
+    "compactSystemPrompt": {
+      "label": "Full summary prompt",
+      "description": "Custom instruction sent to the LLM for full compression. Leave empty to use the built-in default."
+    },
+    "compactLightPrompt": {
+      "label": "Light summary prompt",
+      "description": "Custom instruction sent to the LLM for light compression. Leave empty to use the built-in default."
+    },
+    "optionPolicyMode": {
+      "label": "Option passthrough policy",
+      "description": "Controls whether user request options can be passed to upstream providers. By default, only allowlisted paths are passed."
+    },
+    "allowedPaths": {
+      "label": "Model option allowlist",
+      "description": "JSON object. default applies to every protocol, while protocol-specific entries add paths for that protocol only. Paths use xxx.xxx."
+    },
+    "deniedPaths": {
+      "label": "Model option denylist",
+      "description": "JSON object. Used only in denylist mode. System-reserved fields are blocked even when they are not listed."
+    },
+    "titlePrompt": {
+      "label": "Title generation prompt",
+      "description": "The model must return JSON: '{' \"title\": \"your summarized title\" '}'. Supports the '{{MESSAGES}}' placeholder."
+    },
+    "labelsPrompt": {
+      "label": "Label generation prompt",
+      "description": "The model must return JSON: '{' \"labels\": [\"label1\", \"label2\"] '}'. Supports the '{{MESSAGES}}' placeholder."
+    },
+    "defaultPromptPlaceholder": "Leave empty to use the built-in default prompt"
+  },
+  "preview": {
+    "title": "Live preview",
+    "passed": "Passed",
+    "filtered": "Filtered",
+    "emptyPassed": "No paths are currently passed through",
+    "emptyFiltered": "No paths are currently filtered",
+    "systemDenied": "System blocked",
+    "hitDenylist": "Matched denylist",
+    "hitAllowlist": "Matched allowlist",
+    "otherFields": "Other fields",
+    "notInDenylist": "Not on the denylist"
+  },
+  "guide": {
+    "button": "Guide",
+    "close": "Close",
+    "title": "Option passthrough guide",
+    "description": "Control which user options can enter upstream requests.",
+    "pathTitle": "Path syntax",
+    "pathLabel": "Path",
+    "pathDescription": "Use the field name for top-level fields. Use dot notation for nested fields. Multiple nesting levels are supported.",
+    "strategyTitle": "Passthrough strategy",
+    "allowlistDescription": "Only listed paths are passed. Other fields are discarded.",
+    "denylistDescription": "Pass by default. Paths matched by the denylist or system blocklist are removed.",
+    "openAIServiceTierNote": "OpenAI service_tier only accepts default, flex, or priority. It is omitted when not configured.",
+    "protocolTitle": "Protocol keys",
+    "protocolDescription": "default applies to every protocol. Other keys apply only to their matching protocol.",
+    "systemDeniedTitle": "System blocklist",
+    "systemDeniedDescription": "These fields are always blocked and cannot be allowed by the allowlist."
+  },
+  "toast": {
+    "sessionExpired": "Session expired",
+    "signInAgain": "Please sign in again before continuing.",
+    "loadFailed": "Failed to load conversation settings",
+    "saveFailed": "Could not save conversation settings",
+    "updated": "Conversation settings updated"
+  },
+  "dataExport": {
+    "title": "All conversations",
+    "description": "Export all conversations, messages, and metadata as a JSONL file.",
+    "exportButton": "Export",
+    "success": "Exported {count} conversations",
+    "partial": "Exported {exported} conversations, {failed} failed",
+    "failed": "Export failed. Please try again."
+  }
+}

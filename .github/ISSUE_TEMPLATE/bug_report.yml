@@ -1,0 +1,111 @@
+name: Bug report
+description: Report a reproducible defect in DEEIX Chat.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. For security vulnerabilities, do not open a public issue. Email support@deeix.com instead.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Choose the main area where the bug appears.
+      options:
+        - Frontend / UI
+        - Backend / API
+        - Authentication / authorization
+        - Conversations / streaming
+        - Files / RAG / extraction
+        - Model routing / providers
+        - MCP / tools
+        - Billing / payments
+        - Admin console
+        - Deployment / Docker / configuration
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Provide the release version, Docker image tag, branch, or commit SHA where the issue occurs.
+      placeholder: "v0.1.0, ghcr.io/deeix-ai/deeix-chat:latest, main@abcdef1"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, browser, deployment mode, database/cache services, and any relevant provider or storage setup.
+      placeholder: |
+        OS:
+        Browser:
+        Deployment: local / Docker / separated frontend-backend / other
+        PostgreSQL:
+        Redis:
+        Object storage:
+        Model provider:
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest reliable sequence that reproduces the problem.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, screenshots, or request samples
+      description: Paste relevant logs, screenshots, network responses, request IDs, or API samples. You can also drag and drop screenshots, log files, request samples, or documents into this field. Remove secrets and personal data.
+      placeholder: |
+        Paste logs or request samples here, or drag and drop screenshots/files into this field.
+    validations:
+      required: false
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration and deployment context
+      description: Share relevant non-secret config values, environment variables, reverse proxy/CDN details, or CORS/public URL settings.
+      placeholder: |
+        APP_ENV:
+        NEXT_PUBLIC_API_BASE_URL:
+        server.public_api_base_url:
+        server.public_web_base_url:
+        server.cors_allow_origin:
+    validations:
+      required: false
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submit checklist
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: I removed secrets, tokens, credentials, and personal data from this report.
+          required: true
+        - label: This is not a security vulnerability report.
+          required: true

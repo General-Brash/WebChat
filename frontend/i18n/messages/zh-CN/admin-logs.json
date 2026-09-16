@@ -1,0 +1,496 @@
+{
+  "title": "日志",
+  "centerTitle": "日志中心",
+  "audit": "操作审计",
+  "usage": "模型调用",
+  "system": "系统事件",
+  "tabs": {
+    "audit": "操作审计",
+    "usage": "模型调用",
+    "auth": "认证安全",
+    "orders": "订单记录",
+    "redemptions": "兑换记录",
+    "conversation": "对话事件",
+    "moderation": "审核事件",
+    "system": "系统事件"
+  },
+  "cleanup": {
+    "trigger": "清理日志",
+    "title": "清理历史日志",
+    "description": "所选日期当天 00:00 之前的数据将被物理删除，操作不可恢复。",
+    "typeLabel": "日志类型",
+    "dateLabel": "截止日期",
+    "datePlaceholder": "选择日期",
+    "impactTitle": "影响范围",
+    "highRisk": "高风险",
+    "boundary": "将删除 {date} 00:00 之前的数据，不包含该日期当天的数据。",
+    "confirm": "清理",
+    "deleting": "正在清理",
+    "types": {
+      "audit": "操作审计",
+      "auth": "认证安全",
+      "usage": "模型调用",
+      "orders": "订单记录",
+      "conversation": "对话事件",
+      "system": "系统事件"
+    },
+    "impacts": {
+      "audit": "仅删除管理员和用户操作的追踪记录，不会删除用户、会话或其他业务数据。",
+      "auth": "删除登录、二步验证、密码及其他安全事件历史，不会注销当前会话或修改登录凭据。",
+      "usage": "删除用量与费用账本，会影响历史日/月用量、当前周期额度统计和计费追溯，并可能使已清理周期的已用额度下降。",
+      "orders": "删除支付订单及回调关联依据，不会撤销已发放的余额或订阅，但旧支付回调可能失败，支付追溯和幂等依据将丢失。",
+      "conversation": "删除消息处理轨迹、工具调用和运行事件；会话与消息正文保留，但历史处理过程和工具详情可能不再展示。",
+      "system": "删除系统诊断与故障排查记录，不会改变系统配置或当前运行状态。"
+    },
+    "toast": {
+      "sessionExpired": "登录状态已失效",
+      "signInAgain": "请重新登录后再继续操作。",
+      "success": "日志清理完成，共删除 {count} 条记录",
+      "failed": "日志清理失败"
+    }
+  },
+  "toast": {
+    "sessionExpired": "登录状态已失效",
+    "signInAgain": "请重新登录后再继续操作。",
+    "auditLoadFailed": "审计日志加载失败",
+    "authLoadFailed": "认证日志加载失败",
+    "systemLoadFailed": "系统事件加载失败",
+    "usageLoadFailed": "调用日志加载失败",
+    "ordersLoadFailed": "订单记录加载失败",
+    "redemptionsLoadFailed": "兑换记录加载失败",
+    "conversationEventsLoadFailed": "对话事件加载失败",
+    "conversationEventDetailLoadFailed": "对话事件详情加载失败",
+    "modelFilterLoadFailed": "模型筛选加载失败"
+  },
+  "sort": {
+    "idDesc": "ID 从新到旧",
+    "idAsc": "ID 从旧到新",
+    "createdDesc": "创建时间 从新到旧",
+    "createdAsc": "创建时间 从旧到新",
+    "occurredDesc": "发生时间 从新到旧",
+    "occurredAsc": "发生时间 从旧到新",
+    "callTimeDesc": "调用时间 从新到旧",
+    "callTimeAsc": "调用时间 从旧到新",
+    "costDesc": "费用 从高到低",
+    "tokensDesc": "Token 从高到低",
+    "latencyDesc": "延迟 从高到低",
+    "paidDesc": "支付时间 从新到旧",
+    "amountDesc": "金额 从高到低",
+    "sequenceAsc": "事件顺序 从旧到新"
+  },
+  "filters": {
+    "allResources": "全部",
+    "allActions": "全部",
+    "allSources": "全部",
+    "allEvents": "全部",
+    "allResults": "全部",
+    "allLevels": "全部",
+    "timeRange": "时间范围",
+    "levels": {
+      "info": "信息",
+      "warn": "警告",
+      "error": "错误"
+    }
+  },
+  "columns": {
+    "actor": "操作人",
+    "action": "动作",
+    "resource": "资源",
+    "time": "时间",
+    "requestID": "请求 ID",
+    "user": "用户",
+    "event": "事件",
+    "result": "结果",
+    "reason": "原因",
+    "level": "级别",
+    "source": "来源",
+    "message": "消息",
+    "caller": "调用人",
+    "model": "模型",
+    "usage": "用量",
+    "billing": "计费",
+    "balanceAfter": "结算后余额",
+    "latency": "延迟",
+    "orderNo": "订单号",
+    "type": "类型",
+    "provider": "渠道",
+    "status": "状态",
+    "upstream": "上游",
+    "amount": "金额",
+    "scope": "范围",
+    "tool": "工具",
+    "runID": "运行 ID",
+    "code": "兑换码",
+    "reward": "兑换内容",
+    "balanceAfterRedemption": "兑换后余额"
+  },
+  "audit": {
+    "searchPlaceholder": "搜索用户 ID、动作、资源、请求 ID、IP、详情",
+    "empty": "暂无审计日志",
+    "resources": {
+      "user": "用户与账号",
+      "conversation": "会话",
+      "conversation_project": "项目",
+      "message": "消息",
+      "file": "文件",
+      "memory": "记忆",
+      "settings": "系统设置",
+      "logs": "日志"
+    },
+    "actions": {
+      "login": "登录",
+      "stream_message": "发送消息",
+      "create_conversation": "创建会话",
+      "fork_conversation": "分支会话",
+      "rename_conversation": "重命名会话",
+      "update_conversation_labels": "更新会话标签",
+      "export_conversation": "导出会话",
+      "delete_conversation": "删除会话",
+      "set_conversation_star": "星标会话",
+      "set_conversation_archive": "归档会话",
+      "set_conversation_project": "移动会话项目",
+      "batch_set_conversation_project": "批量移动会话项目",
+      "create_conversation_project": "创建项目",
+      "update_conversation_project": "更新项目",
+      "delete_conversation_project": "删除项目",
+      "reorder_conversation_projects": "调整项目顺序",
+      "create_conversation_share": "创建分享",
+      "regenerate_conversation_share": "重生成分享",
+      "revoke_conversation_share": "撤销分享",
+      "revoke_conversation_shares": "批量撤销分享",
+      "clone_shared_conversation": "克隆分享会话",
+      "update_message": "更新消息",
+      "set_message_feedback": "消息反馈",
+      "upload_file": "上传文件",
+      "update_file": "更新文件",
+      "delete_file": "删除文件",
+      "upsert_user_memory": "保存记忆",
+      "delete_user_memory": "删除记忆",
+      "settings_update": "更新系统设置",
+      "admin_create_user": "管理员创建用户",
+      "admin_patch_user": "管理员更新用户",
+      "admin_update_user_status": "管理员修改用户状态",
+      "admin_revoke_user_sessions": "管理员吊销用户会话",
+      "admin_reset_user_password": "管理员重置密码",
+      "admin_reset_user_2fa": "管理员重置二步验证",
+      "admin_delete_user": "管理员删除用户",
+      "admin_cleanup_logs": "管理员清理日志",
+      "admin_cleanup_conversation_runs": "管理员清理对话运行轨迹"
+    }
+  },
+  "auth": {
+    "searchPlaceholder": "搜索用户 ID 或事件类型",
+    "empty": "暂无认证日志"
+  },
+  "system": {
+    "searchPlaceholder": "搜索来源、事件、资源、请求 ID、详情",
+    "empty": "暂无系统事件"
+  },
+  "usage": {
+    "searchPlaceholder": "搜索用户 ID、平台模型、上游模型、上游名、绑定编码、协议",
+    "empty": "暂无调用日志",
+    "filters": {
+      "billingMode": "计费模式",
+      "all": "全部",
+      "allModels": "全部",
+      "model": "调用模型"
+    },
+    "billingModes": {
+      "token": "按量",
+      "call": "按次",
+      "duration": "按秒",
+      "tiered": "阶梯"
+    },
+    "modelTooltip": {
+      "upstreamName": "上游名",
+      "upstreamModel": "真实模型",
+      "bindingCode": "绑定编码",
+      "protocol": "协议"
+    },
+    "tokens": {
+      "inputShort": "入",
+      "outputShort": "出",
+      "cacheReadShort": "读",
+      "cacheWriteShort": "写",
+      "input": "输入",
+      "output": "输出",
+      "reasoning": "推理",
+      "outputTotal": "输出合计",
+      "imageCount": "{count} 张",
+      "secondCount": "{count} 秒"
+    },
+    "billing": {
+      "cacheWrite": "缓存(写)",
+      "cacheWrite5m": "缓存(写 5m)",
+      "cacheWrite1h": "缓存(写 1h)",
+      "cacheWrite5m1h": "缓存(写 5m/1h)",
+      "cacheWritePricingLabel": "缓存(写 5m)",
+      "cacheWritePricingNote": "Claude 缓存读按后台配置；缓存写 5m 按后台配置价 1.25x，1h 按 2x；Fast Mode 会基于此再 6x。",
+      "claudeCacheWriteMixedNote": "Claude 缓存写按后台配置价 {multiplier} 计费。",
+      "claudeCacheWriteNote": "Claude {timeout} 缓存写按后台配置价 {multiplier} 计费。",
+      "claudeFastModeNote": "Claude Fast Mode：输入、输出和缓存费用按 {multiplier} 计费。",
+      "openaiServiceTierNote": "OpenAI service_tier={tier}：按 {multiplier} 计费。",
+      "input": "输入",
+      "output": "输出",
+      "cacheRead": "缓存(读)",
+      "rateNote": "倍率说明",
+      "cacheNote": "缓存说明",
+      "total": "总计",
+      "freeModelNoBilling": "免费",
+      "perCall": "每次",
+      "perSecond": "每秒",
+      "callUnit": "次",
+      "secondUnit": "秒",
+      "tieredRangeBounded": "原始输入区间 {from}~{upTo}",
+      "tieredRangeOpen": "原始输入区间 {from}+",
+      "table": {
+        "item": "计费项目",
+        "usage": "用量",
+        "unitPrice": "单价",
+        "amount": "金额"
+      }
+    }
+  },
+  "orders": {
+    "searchPlaceholder": "搜索用户 ID、订单号、渠道、状态、外部支付 ID",
+    "empty": "暂无订单记录",
+    "filters": {
+      "all": "全部",
+      "orderType": "订单类型",
+      "provider": "支付渠道",
+      "status": "支付状态"
+    },
+    "types": {
+      "subscription": "订阅",
+      "topup": "充值"
+    },
+    "status": {
+      "pending": "待支付",
+      "paid": "已支付",
+      "expired": "已过期",
+      "failed": "支付失败"
+    }
+  },
+  "redemptions": {
+    "searchPlaceholder": "搜索兑换流水号、兑换码摘要或备注",
+    "empty": "暂无兑换记录",
+    "filters": {
+      "all": "全部",
+      "rewardType": "奖励类型",
+      "codeID": "兑换码 ID",
+      "codeIDPlaceholder": "输入兑换码 ID",
+      "userID": "用户 ID",
+      "userIDPlaceholder": "输入用户 ID",
+      "clearCodeID": "清除兑换码 ID",
+      "clearUserID": "清除用户 ID"
+    },
+    "rewards": {
+      "balance": "余额",
+      "subscription": "订阅套餐",
+      "durationDays": "{count} 天"
+    }
+  },
+  "conversation": {
+    "searchPlaceholder": "搜索用户 ID、运行 ID、事件、阶段、标题、工具名",
+    "empty": "暂无对话事件",
+    "filters": {
+      "all": "全部",
+      "scope": "事件范围",
+      "eventType": "事件类型",
+      "status": "状态"
+    },
+    "scopes": {
+      "trace_block": "轨迹块",
+      "trace_event": "轨迹事件",
+      "tool_call": "工具调用"
+    },
+    "status": {
+      "streaming": "生成中",
+      "completed": "已完成",
+      "error": "异常"
+    },
+    "cleanup": {
+      "action": "删除运行轨迹",
+      "title": "删除运行轨迹",
+      "description": "将永久删除所选 {count} 个运行的全部处理轨迹。会话、消息、附件、调用记录和计费数据不受影响。",
+      "confirm": "删除",
+      "deleting": "正在删除",
+      "success": "已删除 {runs} 个运行的 {events} 条轨迹记录",
+      "failed": "运行轨迹删除失败",
+      "maxSelection": "单次最多选择 100 个运行",
+      "selectAll": "选择当前页运行",
+      "selectRun": "选择运行 {runID}"
+    }
+  },
+  "detail": {
+    "titles": {
+      "audit": "审计日志详情",
+      "auth": "认证日志详情",
+      "usage": "调用日志详情",
+      "order": "订单记录详情",
+      "redemption": "兑换记录详情",
+      "conversation": "对话事件详情",
+      "system": "系统事件详情"
+    },
+    "fallbacks": {
+      "authEvent": "认证事件",
+      "modelCall": "模型调用",
+      "order": "订单记录",
+      "redemption": "兑换记录",
+      "conversationEvent": "对话事件",
+      "systemEvent": "系统事件",
+      "auditEvent": "审计事件"
+    },
+    "blocks": {
+      "event": "事件",
+      "actor": "操作人",
+      "request": "请求",
+      "user": "用户",
+      "resource": "资源",
+      "call": "调用",
+      "modelRoute": "模型路由",
+      "usageBilling": "用量计费",
+      "order": "订单",
+      "payment": "支付",
+      "redemption": "兑换",
+      "redemptionCode": "兑换码",
+      "reward": "奖励",
+      "conversationEvent": "对话事件",
+      "tool": "工具"
+    },
+    "codeStatus": {
+      "active": "启用",
+      "inactive": "停用",
+      "deleted": "已删除"
+    },
+    "rewardTypes": {
+      "balance": "余额",
+      "subscription": "订阅套餐"
+    },
+    "fields": {
+      "action": "动作",
+      "resource": "资源",
+      "resourceID": "资源 ID",
+      "createdAt": "创建时间",
+      "user": "用户",
+      "userID": "用户 ID",
+      "requestID": "请求 ID",
+      "event": "事件",
+      "result": "结果",
+      "reason": "原因",
+      "occurredAt": "发生时间",
+      "level": "级别",
+      "source": "来源",
+      "message": "消息",
+      "caller": "调用人",
+      "conversationID": "会话 ID",
+      "callTime": "调用时间",
+      "platformModel": "平台模型",
+      "upstreamName": "上游名称",
+      "upstreamModel": "上游模型",
+      "bindingCode": "绑定编码",
+      "protocol": "协议",
+      "billing": "计费",
+      "balanceAfter": "结算后余额",
+      "totalTokens": "总 Token",
+      "reasoning": "推理",
+      "callCount": "调用次数",
+      "latency": "延迟",
+      "orderNo": "订单号",
+      "orderType": "订单类型",
+      "provider": "支付渠道",
+      "status": "状态",
+      "paidAt": "支付时间",
+      "amount": "金额",
+      "credit": "入账金额",
+      "interval": "周期",
+      "externalPaymentID": "外部支付 ID",
+      "externalCheckoutID": "外部收银台 ID",
+      "runID": "运行 ID",
+      "eventScope": "事件范围",
+      "stage": "阶段",
+      "seq": "序号",
+      "refNo": "兑换流水号",
+      "redeemedAt": "兑换时间",
+      "codeHint": "兑换码",
+      "codeID": "兑换码 ID",
+      "codeDescription": "兑换码备注",
+      "codeStatus": "兑换码状态",
+      "rewardType": "奖励类型",
+      "planName": "订阅套餐",
+      "subscriptionID": "订阅 ID",
+      "balanceBefore": "兑换前余额",
+      "balanceAfterRedemption": "兑换后余额",
+      "durationDays": "套餐时长",
+      "messageID": "消息 ID",
+      "toolName": "工具名",
+      "toolCallID": "工具调用 ID",
+      "title": "标题",
+      "summary": "摘要",
+      "payloadSize": "负载大小"
+    },
+    "result": {
+      "success": "成功",
+      "failure": "失败",
+      "blocked": "阻断"
+    },
+    "rewardDurationDays": "{count} 天",
+    "rawUsageJsonTitle": "原始 Usage JSON",
+    "jsonTitle": "详情 JSON",
+    "jsonFields": {
+      "payload": "事件负载",
+      "input": "工具输入",
+      "output": "工具输出",
+      "error": "工具错误"
+    },
+    "loading": "正在加载详情",
+    "jsonEmpty": "此事件没有可显示的 JSON 详情",
+    "jsonOmitted": "{label}大小为 {size}，超过安全查看上限，内容未加载。",
+    "copied": "{label}已复制",
+    "copyFailed": "复制失败"
+  },
+  "moderation": {
+    "searchPlaceholder": "搜索完整事件编号、用户、结果或运行 ID…",
+    "empty": "暂无审核事件。",
+    "loadFailed": "审核事件加载失败",
+    "viewDetail": "查看详情",
+    "detailTitle": "审核事件详情",
+    "detailFailed": "加载事件详情失败",
+    "detailText": "解密文本",
+    "detailImages": "隔离图片",
+    "detailImageAlt": "审核图片 {index}",
+    "imageLoadFailed": "部分隔离图片加载失败",
+    "filters": {
+      "all": "全部"
+    },
+    "results": {
+      "passed": "通过",
+      "hit": "命中",
+      "failedOpen": "失败开放"
+    },
+    "directions": {
+      "input": "输入",
+      "output": "输出"
+    },
+    "modalities": {
+      "text": "文本",
+      "image": "图像"
+    },
+    "columns": {
+      "eventId": "事件编号",
+      "user": "用户",
+      "result": "结果",
+      "direction": "方向",
+      "modality": "模态",
+      "latency": "延迟",
+      "createdAt": "时间",
+      "actions": "操作",
+      "model": "模型",
+      "userID": "用户 ID",
+      "runID": "运行 ID"
+    },
+    "blocks": {
+      "event": "事件"
+    }
+  }
+}

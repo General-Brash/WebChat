@@ -1,0 +1,320 @@
+package conversation
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/channel"
+	model "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/textutil"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/traceid"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/background"
+	"go.uber.org/zap"
+)
+
+type messageSendRunState struct {
+	service      *Service
+	conversation *model.Conversation
+	run          *model.Run
+	// route 是最近一次应用到 run 的上游路由；中断收尾与成功持久化都以它标注消息来源。
+	route            *channel.ResolvedRoute
+	startedAt        time.Time
+	userMessage      **model.Message
+	assistantMessage **model.Message
+	traceRecorder    **messageTraceRecorder
+	result           **SendMessageResult
+	traceContext     context.Context
+	reuseUserMessage bool
+}
+
+func (s *Service) claimConversationRun(ctx context.Context, run *model.Run) error {
+	if err := s.repo.CreateConversationRun(ctx, run); err != nil {
+		if errors.Is(err, repository.ErrDuplicate) {
+			return ErrDuplicateMessageGenerationRun
+		}
+		return err
+	}
+	return nil
+}
+
+// applyRoute 把解析出的上游路由写入 run 记录；路由故障转移后再次调用即覆盖。
+func (r *messageSendRunState) applyRoute(route *channel.ResolvedRoute) {
+	r.route = route
+	r.run.Endpoint = llm.DefaultEndpointForAdapter(route.Protocol)
+	r.run.ProviderProtocol = route.Protocol
+	r.run.UpstreamID = route.UpstreamID
+	r.run.UpstreamModelID = route.UpstreamModelID
+	r.run.UpstreamName = route.UpstreamName
+	r.run.PlatformModelName = route.PlatformModelName
+	r.run.RoutedBindingCode = route.BindingCode
+	r.run.ModelVendor = route.ModelVendor
+	r.run.ModelIcon = route.ModelIcon
+	r.run.UpstreamModelName = route.UpstreamModel
+}
+
+func newMessageSendRunState(
+	service *Service,
+	input SendMessageInput,
+	conversation *model.Conversation,
+	startedAt time.Time,
+	runID string,
+	trigger llm.TrustedTriggerContext,
+) *messageSendRunState {
+	return &messageSendRunState{
+		service:      service,
+		conversation: conversation,
+		startedAt:    startedAt,
+		run: &model.Run{
+			RunID:               runID,
+			RequestID:           strings.TrimSpace(input.RequestID),
+			UserID:              input.UserID,
+			TriggererUserID:     trigger.TriggererUserID,
+			ResourceOwnerUserID: trigger.ResourceOwnerUserID,
+			Purpose:             strings.TrimSpace(trigger.Purpose),
+			ExecutionID:         strings.TrimSpace(trigger.ExecutionID),
+			ParentExecutionID:   strings.TrimSpace(trigger.ParentExecutionID),
+			TriggerCreatedAt:    trustedTriggerCreatedAtPointer(trigger),
+			ConversationID:      input.ConversationID,
+			TaskType:            "chat",
+			Endpoint:            llm.EndpointResponses,
+			Provider:            strings.TrimSpace(conversation.Provider),
+			ProviderProtocol:    "",
+			UpstreamID:          0,
+			UpstreamModelID:     0,
+			UpstreamName:        "",
+			RequestedModelName:  strings.TrimSpace(conversation.Model),
+			PlatformModelName:   "",
+			RoutedBindingCode:   "",
+			ModelVendor:         "",
+			ModelIcon:           "",
+			UpstreamModelName:   "",
+			InputTokens:         0,
+			OutputTokens:        0,
+			CacheReadTokens:     0,
+			CacheWriteTokens:    0,
+			ReasoningTokens:     0,
+			ToolCallsCount:      0,
+			Status:              "running",
+			ErrorCode:           "",
+			ErrorMessage:        "",
+			StartedAt:           startedAt,
+			EndedAt:             nil,
+		},
+	}
+}
+
+func (r *messageSendRunState) bind(
+	userMessage **model.Message,
+	assistantMessage **model.Message,
+	traceRecorder **messageTraceRecorder,
+	result **SendMessageResult,
+	traceContext context.Context,
+) {
+	r.userMessage = userMessage
+	r.assistantMessage = assistantMessage
+	r.traceRecorder = traceRecorder
+	r.result = result
+	r.traceContext = traceContext
+}
+
+func (r *messageSendRunState) finalize(ctx context.Context, retErr error) {
+	if r == nil || r.service == nil || r.run == nil {
+		return
+	}
+	finalizeCtx, finalizeCancel := background.WithTimeout(ctx, 5*time.Second)
+	defer finalizeCancel()
+
+	r.finalizeRun(retErr)
+	r.finalizeUserMessage(finalizeCtx, retErr)
+	userMessage := r.currentUserMessage()
+	if shouldPersistConversationFallbackTitleAfterSend(retErr, userMessage) && r.conversation != nil {
+		r.service.persistConversationFallbackTitle(finalizeCtx, *r.conversation, *userMessage)
+	}
+	r.finalizeAssistantMessage(finalizeCtx, retErr)
+	r.persistRun(finalizeCtx)
+}
+
+func shouldPersistConversationFallbackTitleAfterSend(retErr error, userMessage *model.Message) bool {
+	return userMessage != nil && errors.Is(retErr, ErrMessageGenerationCanceled)
+}
+
+func (r *messageSendRunState) finalizeRun(retErr error) {
+	endedAt := time.Now()
+	r.run.EndedAt = &endedAt
+	r.run.TotalLatencyMS = endedAt.Sub(r.startedAt).Milliseconds()
+	if r.run.TotalLatencyMS < 0 {
+		r.run.TotalLatencyMS = 0
+	}
+	if result := r.currentResult(); result != nil && result.IsModerationBlocked() {
+		applyBlockedRunFields(r.run, result)
+		return
+	}
+	switch {
+	case retErr == nil:
+		r.run.Status = "success"
+	case errors.Is(retErr, ErrMessageGenerationCanceled):
+		r.run.Status = "canceled"
+		r.run.ErrorCode = classifyRunErrorCode(retErr)
+		r.run.ErrorMessage = textutil.TruncateTrimmed(messageErrorSummary(retErr), 255)
+	case r.currentAssistantMessage() != nil && r.currentAssistantMessage().Status == "interrupted":
+		r.run.Status = "interrupted"
+		r.run.ErrorCode = classifyRunErrorCode(retErr)
+		r.run.ErrorMessage = textutil.TruncateTrimmed(messageErrorSummary(retErr), 255)
+	default:
+		r.run.Status = "error"
+		r.run.ErrorCode = classifyRunErrorCode(retErr)
+		r.run.ErrorMessage = textutil.TruncateTrimmed(messageErrorSummary(retErr), 255)
+	}
+	// Preserve barrier pass/fail-open state written mid-flight (do not default to not_required).
+	if result := r.currentResult(); result != nil {
+		applyModerationRunState(r.run, result)
+	}
+}
+
+func (r *messageSendRunState) finalizeUserMessage(ctx context.Context, retErr error) {
+	if r.reuseUserMessage {
+		return
+	}
+	userMessage := r.currentUserMessage()
+	if userMessage == nil {
+		return
+	}
+	if result := r.currentResult(); result != nil && result.IsModerationBlocked() {
+		// Block path already wrote message moderation state; do not overwrite.
+		return
+	}
+	messageStatus := "success"
+	messageErrorCode := ""
+	messageErrorMessage := ""
+	if retErr != nil && !errors.Is(retErr, ErrMessageGenerationCanceled) {
+		if assistantMessage := r.currentAssistantMessage(); assistantMessage == nil || assistantMessage.Status != "interrupted" {
+			messageStatus = "error"
+			messageErrorCode = classifyRunErrorCode(retErr)
+			messageErrorMessage = textutil.TruncateTrimmed(messageErrorSummary(retErr), 255)
+		}
+	}
+	if err := r.service.repo.UpdateMessageState(ctx, userMessage.ID, messageStatus, messageErrorCode, messageErrorMessage); err != nil {
+		r.service.logger.Error("update_message_state_failed",
+			zap.String("trace_id", traceid.FromContext(r.traceContext)),
+			zap.Uint("message_id", userMessage.ID),
+			zap.Error(err),
+		)
+	}
+	userMessage.Status = messageStatus
+	userMessage.ErrorCode = messageErrorCode
+	userMessage.ErrorMessage = messageErrorMessage
+	if result := r.currentResult(); result != nil {
+		result.UserMessage.Status = messageStatus
+		result.UserMessage.ErrorCode = messageErrorCode
+		result.UserMessage.ErrorMessage = messageErrorMessage
+	}
+}
+
+func (r *messageSendRunState) finalizeAssistantMessage(ctx context.Context, retErr error) {
+	if retErr == nil {
+		return
+	}
+	if result := r.currentResult(); result != nil && result.IsModerationBlocked() {
+		// Block path already wrote assistant moderation state; do not overwrite.
+		return
+	}
+	assistantMessage := r.currentAssistantMessage()
+	if assistantMessage == nil {
+		return
+	}
+	messageStatus := "error"
+	if errors.Is(retErr, ErrMessageGenerationCanceled) {
+		messageStatus = "canceled"
+	} else if assistantMessage.Status == "interrupted" {
+		messageStatus = "interrupted"
+	}
+	messageErrorCode := classifyRunErrorCode(retErr)
+	messageErrorMessage := textutil.TruncateTrimmed(messageErrorSummary(retErr), 255)
+	if err := r.service.repo.UpdateMessageState(ctx, assistantMessage.ID, messageStatus, messageErrorCode, messageErrorMessage); err != nil {
+		r.service.logger.Error("update_assistant_message_state_failed",
+			zap.String("trace_id", traceid.FromContext(r.traceContext)),
+			zap.Uint("message_id", assistantMessage.ID),
+			zap.Error(err),
+		)
+	}
+	assistantMessage.Status = messageStatus
+	assistantMessage.ErrorCode = messageErrorCode
+	assistantMessage.ErrorMessage = messageErrorMessage
+	if traceRecorder := r.currentTraceRecorder(); traceRecorder != nil {
+		traceRecorder.fail(retErr)
+	}
+	if result := r.currentResult(); result != nil {
+		result.AssistantMessage.Status = messageStatus
+		result.AssistantMessage.ErrorCode = messageErrorCode
+		result.AssistantMessage.ErrorMessage = messageErrorMessage
+	}
+}
+
+func (r *messageSendRunState) persistRun(ctx context.Context) {
+	if err := r.service.repo.UpdateConversationRun(ctx, r.run); err != nil {
+		r.service.logger.Error("update_conversation_run_failed",
+			zap.String("trace_id", traceid.FromContext(r.traceContext)),
+			zap.String("run_id", r.run.RunID),
+			zap.Error(err),
+		)
+	}
+}
+
+func (r *messageSendRunState) currentUserMessage() *model.Message {
+	if r.userMessage == nil {
+		return nil
+	}
+	return *r.userMessage
+}
+
+func (r *messageSendRunState) currentAssistantMessage() *model.Message {
+	if r.assistantMessage == nil {
+		return nil
+	}
+	return *r.assistantMessage
+}
+
+func (r *messageSendRunState) currentTraceRecorder() *messageTraceRecorder {
+	if r.traceRecorder == nil {
+		return nil
+	}
+	return *r.traceRecorder
+}
+
+func (r *messageSendRunState) currentResult() *SendMessageResult {
+	if r.result == nil {
+		return nil
+	}
+	return *r.result
+}
+
+// applyRetainedGenerationRunUsage 将中断回复已保留的 usage 回填到 run，避免 run 日志与消息/账单口径不一致。
+func applyRetainedGenerationRunUsage(run *model.Run, result *SendMessageResult, toolCallsCount int, startedAt time.Time) {
+	if run == nil || result == nil {
+		return
+	}
+	run.InputTokens = result.UserMessage.InputTokens
+	if sendMessageResultUsesAssistantSideInput(result) {
+		run.InputTokens = result.AssistantMessage.InputTokens
+	}
+	run.OutputTokens = result.AssistantMessage.OutputTokens
+	run.CacheReadTokens = result.UserMessage.CacheReadTokens
+	run.CacheWriteTokens = result.UserMessage.CacheWriteTokens
+	if sendMessageResultUsesAssistantSideInput(result) {
+		run.CacheReadTokens = result.AssistantMessage.CacheReadTokens
+		run.CacheWriteTokens = result.AssistantMessage.CacheWriteTokens
+	}
+	run.ReasoningTokens = result.AssistantMessage.ReasoningTokens
+	run.ToolCallsCount = toolCallsCount
+	run.FirstTokenLatencyMS = result.AssistantMessage.LatencyMS
+	if run.FirstTokenLatencyMS <= 0 {
+		run.FirstTokenLatencyMS = time.Since(startedAt).Milliseconds()
+	}
+	if run.FirstTokenLatencyMS < 0 {
+		run.FirstTokenLatencyMS = 0
+	}
+}

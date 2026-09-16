@@ -1,0 +1,139 @@
+import type { AdminLLMAdapter } from "@/features/admin/api/llm.types";
+
+// 模型类型枚举；展示文案统一走 i18n（adminModels/adminUpstreams 命名空间下的 kinds.*），此处不维护英文 label。
+export const MODEL_KINDS = [
+  "chat",
+  "audio",
+  "image_gen",
+  "image_edit",
+  "video_gen",
+  "video_extension",
+] as const;
+
+// 品牌名为专有名词，不参与翻译；"custom" 由调用方走 i18n（compatible.custom）。
+export const COMPATIBLE_OPTIONS = [
+  { label: "OpenAI", value: "openai" },
+  { label: "Anthropic", value: "anthropic" },
+  { label: "Google", value: "google" },
+  { label: "xAI", value: "xai" },
+  { label: "OpenRouter", value: "openrouter" },
+  { label: "Custom", value: "custom" },
+] as const;
+
+type ProtocolOption = {
+  value: AdminLLMAdapter;
+  label: string;
+  kinds: readonly string[];
+};
+
+export const PROTOCOL_OPTIONS: ReadonlyArray<ProtocolOption> = [
+  { value: "openai_responses", label: "Responses (OpenAI)", kinds: ["chat"] },
+  { value: "openai_chat_completions", label: "Chat Completions (OpenAI)", kinds: ["chat"] },
+  { value: "openai_image_generations", label: "Images Generations (OpenAI)", kinds: ["image_gen"] },
+  { value: "openai_image_edits", label: "Images Edits (OpenAI)", kinds: ["image_edit"] },
+  { value: "openai_video_generations", label: "Video Generations (OpenAI)", kinds: ["video_gen"] },
+  { value: "anthropic_messages", label: "Messages (Anthropic)", kinds: ["chat"] },
+  { value: "google_generate_content", label: "Generate Content (Google)", kinds: ["chat"] },
+  { value: "google_image_generation", label: "Image Generation (Google)", kinds: ["image_gen", "image_edit"] },
+  { value: "gemini_interactions", label: "Interactions (Google)", kinds: ["chat", "image_gen", "image_edit", "video_gen"] },
+  { value: "xai_responses", label: "Responses (xAI)", kinds: ["chat"] },
+  { value: "xai_image", label: "Images Generations (xAI)", kinds: ["image_gen"] },
+  { value: "xai_image_edits", label: "Images Edits (xAI)", kinds: ["image_edit"] },
+  { value: "xai_video", label: "Video Generations (xAI)", kinds: ["video_gen"] },
+  { value: "xai_video_extensions", label: "Video Extensions (xAI)", kinds: ["video_extension"] },
+  { value: "openrouter_chat_completions", label: "Chat Completions (OpenRouter)", kinds: ["chat"] },
+  { value: "openrouter_responses", label: "Responses (OpenRouter)", kinds: ["chat"] },
+] as const;
+
+const PROTOCOL_LABELS: Record<string, string> = {
+  ...Object.fromEntries(PROTOCOL_OPTIONS.map((item) => [item.value, item.label])),
+};
+
+const PROTOCOL_KINDS: Record<string, readonly string[]> = {
+  ...Object.fromEntries(PROTOCOL_OPTIONS.map((item) => [item.value, item.kinds])),
+};
+
+const PROTOCOL_DISPLAY_ORDER = new Map<string, number>(
+  PROTOCOL_OPTIONS.map((item, index) => [item.value, index]),
+);
+
+const IMAGE_ROUTE_PROTOCOL_PAIRS: ReadonlyArray<readonly [AdminLLMAdapter, AdminLLMAdapter]> = [
+  ["openai_image_generations", "openai_image_edits"],
+  ["xai_image", "xai_image_edits"],
+];
+
+const VIDEO_ROUTE_PROTOCOL_PAIRS: ReadonlyArray<readonly [AdminLLMAdapter, AdminLLMAdapter]> = [
+  ["xai_video", "xai_video_extensions"],
+];
+
+// 协议名为技术专有名词（对应上游 API 端点），保持英文展示，不参与翻译。
+export function resolveProtocolLabel(protocol: string): string {
+  return PROTOCOL_LABELS[protocol] ?? protocol;
+}
+
+export function sortProtocolsForDisplay<T extends string>(protocols: readonly T[]): T[] {
+  const seen = new Set<string>();
+  return protocols
+    .map((protocol, index) => ({ protocol, index }))
+    .filter(({ protocol }) => {
+      const key = String(protocol || "").trim();
+      if (!key || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => {
+      const orderA = PROTOCOL_DISPLAY_ORDER.get(a.protocol);
+      const orderB = PROTOCOL_DISPLAY_ORDER.get(b.protocol);
+      if (orderA !== undefined && orderB !== undefined) {
+        return orderA - orderB;
+      }
+      if (orderA !== undefined) {
+        return -1;
+      }
+      if (orderB !== undefined) {
+        return 1;
+      }
+      return a.index - b.index;
+    })
+    .map(({ protocol }) => protocol);
+}
+
+export function isSupportedRouteProtocolSelection(protocols: readonly AdminLLMAdapter[]): boolean {
+  const uniqueProtocols = Array.from(new Set(protocols));
+  if (uniqueProtocols.length <= 1) {
+    return true;
+  }
+  return uniqueProtocols.length === 2 && [...IMAGE_ROUTE_PROTOCOL_PAIRS, ...VIDEO_ROUTE_PROTOCOL_PAIRS].some(
+    ([primaryProtocol, secondaryProtocol]) =>
+      uniqueProtocols.includes(primaryProtocol) && uniqueProtocols.includes(secondaryProtocol),
+  );
+}
+
+export function resolveNextRouteProtocolSelection(
+  currentProtocols: readonly AdminLLMAdapter[],
+  protocol: AdminLLMAdapter,
+): AdminLLMAdapter[] {
+  const current = sortProtocolsForDisplay(currentProtocols);
+  if (current.includes(protocol)) {
+    return sortProtocolsForDisplay(current.filter((item) => item !== protocol));
+  }
+  const candidate = sortProtocolsForDisplay([...current, protocol]);
+  if (isSupportedRouteProtocolSelection(candidate)) {
+    return candidate;
+  }
+  return [protocol];
+}
+
+export function resolveKindsDisplayForProtocols(
+  protocols: readonly AdminLLMAdapter[],
+  fallbackDisplay = "chat",
+): string {
+  const kinds = Array.from(new Set(protocols.flatMap((protocol) => PROTOCOL_KINDS[protocol] ?? [])));
+  return kinds.length > 0 ? kinds.join(",") : fallbackDisplay;
+}
+
+export function resolveCompatibleLabel(compatible: string): string {
+  return COMPATIBLE_OPTIONS.find((item) => item.value === compatible)?.label ?? (compatible || "-");
+}

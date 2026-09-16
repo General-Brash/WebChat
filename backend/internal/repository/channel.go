@@ -1,0 +1,504 @@
+package repository
+
+import (
+	"context"
+	"time"
+
+	domainchannel "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/channel"
+)
+
+// CircuitFailureInput 记录熔断失败所需的全量参数（时长均以秒为单位）。
+type CircuitFailureInput struct {
+	UpstreamID               uint
+	ModelKey                 string
+	ModelWindowSec           int
+	ModelFailureThreshold    int
+	ModelDurationSec         int
+	UpstreamWindowSec        int
+	UpstreamFailureThreshold int
+	UpstreamModelThreshold   int
+	UpstreamThresholdLogic   string
+	UpstreamDurationSec      int
+	// ActiveModelKeys 用于 upstream_model_threshold 逻辑（当前上游下所有活跃路由绑定 key）。
+	ActiveModelKeys []string
+}
+
+// RateLimitBackoffParams rate limit 指数退避计算参数。
+type RateLimitBackoffParams struct {
+	UpstreamID        uint
+	RouteID           uint
+	BackoffBaseSec    int
+	BackoffMaxSec     int
+	BackoffMultiplier int
+	RetryAfterSec     int
+}
+
+// ChannelCacheRepository 封装 channel 模块的缓存能力，屏蔽 Redis 细节。
+type ChannelCacheRepository interface {
+	// CheckUpstreamCircuitState 检查上游级熔断状态。
+	// 返回值为 "closed" / "open" / "half_open_granted" / "half_open_denied"。
+	CheckUpstreamCircuitState(ctx context.Context, upstreamID uint) (string, error)
+
+	// CheckModelCircuitState 检查模型级熔断状态。
+	// 返回值同上。
+	CheckModelCircuitState(ctx context.Context, upstreamID uint, modelKey string) (string, error)
+
+	// RecordCircuitFailure 使用 Lua 脚本原子记录失败并按阈值触发熔断。
+	RecordCircuitFailure(ctx context.Context, input CircuitFailureInput) error
+
+	// RecordFailureMetadata 记录上游最近失败时间与错误信息；写入失败不阻塞主请求。
+	RecordFailureMetadata(ctx context.Context, upstreamID uint, lastError string)
+
+	// RecordSuccessMetadata 记录上游最近成功时间。
+	RecordSuccessMetadata(ctx context.Context, upstreamID uint)
+
+	// ClearUpstreamCircuitKeys 清除 probe 成功后的上游熔断关键键（fails/open/until/probe）。
+	ClearUpstreamCircuitKeys(ctx context.Context, upstreamID uint) error
+
+	// ClearModelCircuitKeys 清除 probe 成功后的模型级熔断关键键。
+	ClearModelCircuitKeys(ctx context.Context, upstreamID uint, modelKey string) error
+
+	// ResetAllCircuitStates 清除全部上游与模型熔断状态和失败计数，不删除健康元数据或限流状态。
+	ResetAllCircuitStates(ctx context.Context) error
+
+	// ReleaseRouteProbes 释放路由上的 probe 令牌（ignore/rate_limit 时使用）。
+	// modelKey 为空则释放上游 probe，否则释放指定模型 probe。
+	ReleaseRouteProbes(ctx context.Context, upstreamID uint, modelKey string) error
+
+	// OpenUpstreamCircuit 手动打开上游熔断（24 小时）。
+	OpenUpstreamCircuit(ctx context.Context, upstreamID uint) error
+
+	// ResetUpstreamCircuit 重置上游全量熔断与计数键。
+	ResetUpstreamCircuit(ctx context.Context, upstreamID uint) error
+
+	// OpenModelCircuit 手动打开模型级熔断（24 小时）。
+	OpenModelCircuit(ctx context.Context, upstreamID uint, modelKey string) error
+
+	// ResetModelCircuit 重置模型级熔断与计数键。
+	ResetModelCircuit(ctx context.Context, upstreamID uint, modelKey string) error
+
+	// QueryUpstreamCircuitStatus 查询上游熔断展示状态（列表用）。
+	QueryUpstreamCircuitStatus(ctx context.Context, upstreamID uint) (open bool, until string)
+
+	// QueryModelCircuitStatus 查询模型级熔断展示状态（列表用）。
+	QueryModelCircuitStatus(ctx context.Context, upstreamID uint, modelKey string) (open bool, until string)
+
+	// GetRateLimitBackoff 返回指定路由当前剩余的 rate limit 退避时长。
+	GetRateLimitBackoff(ctx context.Context, upstreamID uint, routeID uint) (time.Duration, error)
+
+	// RecordRateLimitBackoff 根据指数退避参数记录退避状态。
+	RecordRateLimitBackoff(ctx context.Context, params RateLimitBackoffParams) error
+
+	// ClearRateLimitBackoff 在路由成功后清除该路由的退避状态与累计次数。
+	ClearRateLimitBackoff(ctx context.Context, upstreamID uint, routeID uint) error
+
+	// IncrAPIKeyCounter 原子递增 API Key 轮询计数器，返回当前值（用于 round-robin）。
+	// 若 Redis 不可用则返回 (0, false)。
+	IncrAPIKeyCounter(ctx context.Context, upstreamID uint) (int64, bool)
+}
+
+// ChannelUpstreamRouteRow 定义路由查询结果。
+type ChannelUpstreamRouteRow struct {
+	RouteID                         uint
+	UpstreamModelID                 uint
+	UpstreamID                      uint
+	UpstreamName                    string
+	PlatformModelID                 uint
+	PlatformModelName               string
+	ModelVendor                     string
+	ModelIcon                       string
+	ModelKindsJSON                  string
+	ModelCapabilitiesJSON           string
+	ModelSystemPrompt               string
+	Protocol                        string
+	BaseURL                         string
+	APIKeysEnc                      string
+	ConnectTimeoutMS                int
+	ReadTimeoutMS                   int
+	StreamIdleTimeoutMS             int
+	HeadersJSON                     string
+	RouteHeadersJSON                string
+	BindingCode                     string
+	UpstreamModelName               string
+	UpstreamModelRawJSON            string
+	Weight                          int
+	RoutePriority                   int
+	UpstreamCbFailureThreshold      int
+	UpstreamCbModelThreshold        int
+	UpstreamCbThresholdLogic        string
+	UpstreamCbDurationMin           int
+	UpstreamCbWindowMin             int
+	PlatformModelCbPolicyMode       string
+	PlatformModelCbFailureThreshold int
+	PlatformModelCbDurationMin      int
+	PlatformModelCbWindowMin        int
+	ModelCbFailureThreshold         int
+	ModelCbDurationMin              int
+	ModelCbWindowMin                int
+}
+
+// ChannelUpstreamListRow 定义上游列表查询结果。
+type ChannelUpstreamListRow struct {
+	domainchannel.Upstream
+	ModelsCount       int64
+	ActiveModelsCount int64
+}
+
+// ChannelModelListRow 定义模型列表查询结果。
+type ChannelModelListRow struct {
+	domainchannel.PlatformModel
+	VendorName        string
+	VendorIcon        string
+	DisplayGroupName  string
+	DisplayGroupIcon  string
+	SourceCount       int64
+	ActiveSourceCount int64
+	ProtocolsJSON     string
+	UpstreamNamesJSON string
+}
+
+// ListModelVendorsInput 定义技术厂商目录查询条件。
+type ListModelVendorsInput struct {
+	Offset int
+	Limit  int
+	Query  string
+}
+
+// ListModelDisplayGroupsInput 定义模型展示分组查询条件。
+type ListModelDisplayGroupsInput struct {
+	Offset int
+	Limit  int
+	Query  string
+}
+
+// UpdateModelVendorInput 定义技术厂商可修改的展示字段。
+type UpdateModelVendorInput struct {
+	Name *string
+	Icon *string
+}
+
+const (
+	// ModelVendorDeleteReasonBuiltIn 表示内置厂商受系统保护。
+	ModelVendorDeleteReasonBuiltIn = "built_in"
+	// ModelVendorDeleteReasonReferencedModels 表示仍有平台模型引用该厂商。
+	ModelVendorDeleteReasonReferencedModels = "referenced_models"
+)
+
+// ModelVendorReference 描述阻止删除厂商的平台模型引用。
+type ModelVendorReference struct {
+	ID                uint
+	PlatformModelName string
+}
+
+// ModelVendorDeleteBlockedError 携带厂商无法删除的稳定原因和有界引用预览。
+type ModelVendorDeleteBlockedError struct {
+	Reason         string
+	ReferenceCount int64
+	Models         []ModelVendorReference
+}
+
+func (e *ModelVendorDeleteBlockedError) Error() string {
+	return "model vendor delete blocked"
+}
+
+func (e *ModelVendorDeleteBlockedError) Unwrap() error {
+	return ErrConflict
+}
+
+// UpdateModelDisplayGroupInput 定义模型展示分组可修改字段。
+type UpdateModelDisplayGroupInput struct {
+	Name     *string
+	Icon     *string
+	ModelIDs *[]uint
+}
+
+// ChannelUpstreamModelListRow 定义上游模型路由绑定列表查询结果。
+type ChannelUpstreamModelListRow struct {
+	domainchannel.UpstreamModel
+	RouteID            uint
+	PlatformModelID    uint
+	PlatformModelName  string
+	ModelVendor        string
+	ModelKindsJSON     string
+	ModelIcon          string
+	Protocol           string
+	RouteStatus        string
+	Priority           int
+	Weight             int
+	RouteSource        string
+	CbFailureThreshold int
+	CbDurationMin      int
+	CbWindowMin        int
+	HeadersJSON        string
+}
+
+// ChannelModelSourceRow 定义模型来源列表查询结果。
+type ChannelModelSourceRow struct {
+	domainchannel.PlatformModelRoute
+	UpstreamID                   uint
+	UpstreamName                 string
+	UpstreamStatus               string
+	UpstreamCompatible           string
+	UpstreamProtocolDefaultsJSON string
+	BaseURL                      string
+	BindingCode                  string
+	UpstreamModelName            string
+	UpstreamModelVendor          string
+	UpstreamModelIcon            string
+	UpstreamModelKindsJSON       string
+	SuggestedProtocol            string
+	UpstreamModelStatus          string
+}
+
+// ListChannelUpstreamModelsInput 定义上游模型路由绑定列表查询条件。
+type ListChannelUpstreamModelsInput struct {
+	Offset         int
+	Limit          int
+	Query          string
+	RouteStatus    string
+	UpstreamStatus string
+	Protocol       string
+	Sort           string
+}
+
+// ListChannelUpstreamsInput 定义上游列表查询条件。
+type ListChannelUpstreamsInput struct {
+	Offset     int
+	Limit      int
+	Query      string
+	Status     string
+	Compatible string
+	Sort       string
+}
+
+// ListChannelModelsInput 定义模型列表查询条件。
+type ListChannelModelsInput struct {
+	Offset        int
+	Limit         int
+	OnlyActive    bool
+	OnlyAvailable bool
+	Query         string
+	Status        string
+	Vendor        string
+	Protocol      string
+	UpstreamID    uint
+	Sort          string
+}
+
+// UpdateChannelModelInput 定义平台模型更新字段。
+type UpdateChannelModelInput struct {
+	PlatformModelName *string
+	Vendor            *string
+	// DisplayGroupID 为 nil 时不更新；值为 0 时清空分组并恢复按技术厂商展示。
+	DisplayGroupID     *uint
+	KindsJSON          *string
+	Icon               *string
+	CapabilitiesJSON   *string
+	SystemPrompt       *string
+	AccessScope        *string
+	Status             *string
+	Description        *string
+	CbPolicyMode       *string
+	CbFailureThreshold *int
+	CbDurationMin      *int
+	CbWindowMin        *int
+}
+
+// UpdateChannelUpstreamInput 定义上游配置更新字段。
+type UpdateChannelUpstreamInput struct {
+	Kind                 *string
+	Sub2GroupIDsJSON     *string
+	Name                 *string
+	BaseURL              *string
+	Compatible           *string
+	ProtocolDefaultsJSON *string
+	APIKeysEnc           *string
+	Status               *string
+	ConnectTimeoutMS     *int
+	ReadTimeoutMS        *int
+	StreamIdleTimeoutMS  *int
+	CbFailureThreshold   *int
+	CbModelThreshold     *int
+	CbThresholdLogic     *string
+	CbDurationMin        *int
+	CbWindowMin          *int
+	HeadersJSON          *string
+}
+
+// UpdateChannelPlatformRouteInput 定义平台模型路由绑定更新字段。
+type UpdateChannelPlatformRouteInput struct {
+	PlatformModelID    *uint
+	UpstreamModelID    *uint
+	Protocol           *string
+	Status             *string
+	Priority           *int
+	Weight             *int
+	Source             *string
+	CbFailureThreshold *int
+	CbDurationMin      *int
+	CbWindowMin        *int
+	HeadersJSON        *string
+}
+
+// ReplaceChannelPlatformRoutesInput 定义一个绑定的完整目标路由集合。
+type ReplaceChannelPlatformRoutesInput struct {
+	UpstreamID       uint
+	ExistingRouteIDs []uint
+	Routes           []domainchannel.PlatformModelRoute
+}
+
+// IsZero 判断是否没有任何上游配置更新字段。
+func (input UpdateChannelUpstreamInput) IsZero() bool {
+	return input.Kind == nil && input.Sub2GroupIDsJSON == nil && input.Name == nil &&
+		input.BaseURL == nil &&
+		input.Compatible == nil &&
+		input.ProtocolDefaultsJSON == nil &&
+		input.APIKeysEnc == nil &&
+		input.Status == nil &&
+		input.ConnectTimeoutMS == nil &&
+		input.ReadTimeoutMS == nil &&
+		input.StreamIdleTimeoutMS == nil &&
+		input.CbFailureThreshold == nil &&
+		input.CbModelThreshold == nil &&
+		input.CbThresholdLogic == nil &&
+		input.CbDurationMin == nil &&
+		input.CbWindowMin == nil &&
+		input.HeadersJSON == nil
+}
+
+func (input UpdateChannelPlatformRouteInput) IsZero() bool {
+	return input.PlatformModelID == nil &&
+		input.UpstreamModelID == nil &&
+		input.Protocol == nil &&
+		input.Status == nil &&
+		input.Priority == nil &&
+		input.Weight == nil &&
+		input.Source == nil &&
+		input.CbFailureThreshold == nil &&
+		input.CbDurationMin == nil &&
+		input.CbWindowMin == nil &&
+		input.HeadersJSON == nil
+}
+
+// IsZero 判断是否没有任何更新字段。
+func (input UpdateChannelModelInput) IsZero() bool {
+	return input.PlatformModelName == nil &&
+		input.Vendor == nil &&
+		input.DisplayGroupID == nil &&
+		input.KindsJSON == nil &&
+		input.Icon == nil &&
+		input.CapabilitiesJSON == nil &&
+		input.SystemPrompt == nil &&
+		input.AccessScope == nil &&
+		input.Status == nil &&
+		input.Description == nil &&
+		input.CbPolicyMode == nil &&
+		input.CbFailureThreshold == nil &&
+		input.CbDurationMin == nil &&
+		input.CbWindowMin == nil
+}
+
+// ModelPresentationRepository 定义技术厂商和可选展示分组的持久化能力。
+type ModelPresentationRepository interface {
+	CreateModelVendor(ctx context.Context, item *domainchannel.ModelVendor) error
+	UpdateModelVendor(ctx context.Context, key string, input UpdateModelVendorInput) error
+	DeleteModelVendor(ctx context.Context, key string) error
+	GetModelVendorByKey(ctx context.Context, key string) (*domainchannel.ModelVendor, error)
+	ListModelVendors(ctx context.Context, input ListModelVendorsInput) ([]domainchannel.ModelVendor, int64, error)
+	CreateModelDisplayGroup(ctx context.Context, item *domainchannel.ModelDisplayGroup, modelIDs []uint) error
+	UpdateModelDisplayGroup(ctx context.Context, groupID uint, input UpdateModelDisplayGroupInput) error
+	SetModelsDisplayGroup(ctx context.Context, modelIDs []uint, groupID uint) error
+	GetModelDisplayGroupByID(ctx context.Context, groupID uint) (*domainchannel.ModelDisplayGroup, error)
+	ListModelDisplayGroups(ctx context.Context, input ListModelDisplayGroupsInput) ([]domainchannel.ModelDisplayGroup, int64, error)
+	DeleteModelDisplayGroup(ctx context.Context, groupID uint) error
+}
+
+// ModelIconAssetReferenceSummary 汇总阻止图标资产删除的业务引用。
+type ModelIconAssetReferenceSummary struct {
+	Models           int64
+	Vendors          int64
+	DisplayGroups    int64
+	ConversationRuns int64
+}
+
+// Total 返回所有引用位置的总数。
+func (s ModelIconAssetReferenceSummary) Total() int64 {
+	return s.Models + s.Vendors + s.DisplayGroups + s.ConversationRuns
+}
+
+// ModelIconAssetRepository 定义管理员自定义模型图标的持久化能力。
+type ModelIconAssetRepository interface {
+	CreateModelIconAsset(ctx context.Context, item *domainchannel.ModelIconAsset) error
+	GetModelIconAssetByPublicID(ctx context.Context, publicID string) (*domainchannel.ModelIconAsset, error)
+	GetModelIconAssetBySHA256(ctx context.Context, sha256 string) (*domainchannel.ModelIconAsset, error)
+	ListModelIconAssets(ctx context.Context, offset int, limit int) ([]domainchannel.ModelIconAsset, int64, error)
+	RefreshModelIconAssetUploadLease(ctx context.Context, publicID string, unreferencedAt time.Time, leaseExpiresAt time.Time) error
+	MarkModelIconAssetReady(ctx context.Context, publicID string, readyAt time.Time) error
+	ReserveModelIconAssetReference(ctx context.Context, publicID string, leaseExpiresAt time.Time) error
+	ListExpiredModelIconAssets(ctx context.Context, expiredBefore time.Time, limit int) ([]domainchannel.ModelIconAsset, error)
+	HasModelIconAssetReference(ctx context.Context, ref string) (bool, error)
+	GetModelIconAssetReferenceSummary(ctx context.Context, ref string) (ModelIconAssetReferenceSummary, error)
+	MarkModelIconAssetUnreferenced(ctx context.Context, assetID uint, expiredBefore time.Time, unreferencedAt time.Time, leaseExpiresAt time.Time) (bool, error)
+	RequestModelIconAssetDeletion(ctx context.Context, assetID uint, requestedAt time.Time, leaseExpiresAt time.Time) error
+	ClaimModelIconAssetDeletion(ctx context.Context, assetID uint, expiredBefore time.Time, deletingAt time.Time) (bool, error)
+	DeleteClaimedModelIconAsset(ctx context.Context, assetID uint) error
+}
+
+// ChannelRepository 定义渠道管理依赖的仓储能力。
+type ChannelRepository interface {
+	WithinTransaction(ctx context.Context, fn func(ChannelRepository) error) error
+	CreateUpstream(ctx context.Context, item *domainchannel.Upstream) error
+	UpdateUpstream(ctx context.Context, upstreamID uint, input UpdateChannelUpstreamInput) error
+	GetUpstreamByID(ctx context.Context, upstreamID uint) (*domainchannel.Upstream, error)
+	GetUpstreamListRowByID(ctx context.Context, upstreamID uint) (*ChannelUpstreamListRow, error)
+	ListUpstreams(ctx context.Context, input ListChannelUpstreamsInput) ([]ChannelUpstreamListRow, int64, error)
+	CreateModel(ctx context.Context, item *domainchannel.PlatformModel) error
+	UpdateModel(ctx context.Context, modelID uint, input UpdateChannelModelInput) error
+	ReorderModels(ctx context.Context, orderedModelIDs []uint) error
+	GetModelByID(ctx context.Context, modelID uint) (*domainchannel.PlatformModel, error)
+	GetModelListRowByID(ctx context.Context, modelID uint) (*ChannelModelListRow, error)
+	GetModelByName(ctx context.Context, platformModelName string) (*domainchannel.PlatformModel, error)
+	GetActiveModelByName(ctx context.Context, platformModelName string) (*domainchannel.PlatformModel, error)
+	GetActiveRoutableModelKindsJSON(ctx context.Context, platformModelName string) (string, bool, error)
+	ListModels(ctx context.Context, input ListChannelModelsInput) ([]ChannelModelListRow, int64, error)
+	CreateUpstreamModel(ctx context.Context, item *domainchannel.UpstreamModel) error
+	UpsertUpstreamModel(ctx context.Context, item *domainchannel.UpstreamModel) error
+	GetUpstreamModelByID(ctx context.Context, sourceID uint, upstreamID uint) (*domainchannel.UpstreamModel, error)
+	GetUpstreamModelByUpstreamName(ctx context.Context, upstreamID uint, upstreamModelName string) (*domainchannel.UpstreamModel, error)
+	DeleteUpstreamModel(ctx context.Context, sourceID uint, upstreamID uint) error
+	ListManagedUpstreamModels(ctx context.Context, upstreamID uint) ([]domainchannel.UpstreamModel, error)
+	ApplyUpstreamModelCatalogChanges(ctx context.Context, upstreamID uint, input ApplyUpstreamModelCatalogChangesInput) (int64, error)
+	ListUpstreamModels(ctx context.Context, upstreamID uint, input ListChannelUpstreamModelsInput) ([]ChannelUpstreamModelListRow, int64, error)
+	ListUpstreamModelsByNames(ctx context.Context, upstreamID uint, upstreamModelNames []string) ([]ChannelUpstreamModelListRow, error)
+	GetUpstreamModelRouteByID(ctx context.Context, upstreamID uint, routeID uint) (*ChannelUpstreamModelListRow, error)
+	GetUpstreamModelRouteByNames(ctx context.Context, upstreamID uint, platformModelName string, upstreamModelName string, protocol string) (*ChannelUpstreamModelListRow, error)
+	UpsertPlatformModelRoute(ctx context.Context, item *domainchannel.PlatformModelRoute) error
+	ReplacePlatformModelRoutes(ctx context.Context, inputs []ReplaceChannelPlatformRoutesInput) ([]domainchannel.PlatformModelRoute, error)
+	GetModelUpstreamSourceByRouteID(ctx context.Context, platformModelName string, routeID uint) (*ChannelModelSourceRow, error)
+	ListPlatformModelRoutesByPair(ctx context.Context, upstreamID uint, platformModelID uint, upstreamModelID uint) ([]domainchannel.PlatformModelRoute, error)
+	GetPlatformModelRouteByID(ctx context.Context, routeID uint, upstreamID uint) (*domainchannel.PlatformModelRoute, error)
+	UpdatePlatformModelRouteByID(ctx context.Context, routeID uint, upstreamID uint, input UpdateChannelPlatformRouteInput) error
+	DeletePlatformModelRoute(ctx context.Context, routeID uint, upstreamID uint) error
+	ListModelUpstreamSources(ctx context.Context, platformModelName string, offset int, limit int) ([]ChannelModelSourceRow, int64, error)
+	ListModelUpstreamSourcesForUpdate(ctx context.Context, platformModelName string) ([]ChannelModelSourceRow, error)
+	ListActiveRoutesByModel(ctx context.Context, platformModelName string) ([]ChannelUpstreamRouteRow, error)
+	ListActiveRouteBindingCodesForUpstream(ctx context.Context, upstreamID uint) ([]string, error)
+	GetLLMSetting(ctx context.Context, key string) (*domainchannel.LLMSetting, error)
+	ListLLMSettings(ctx context.Context) ([]domainchannel.LLMSetting, error)
+	UpsertLLMSetting(ctx context.Context, item *domainchannel.LLMSetting) error
+	// GetBreakerErrorClassification 从全局配置读取并返回熔断错误分类（含默认值）。
+	GetBreakerErrorClassification(ctx context.Context) (domainchannel.BreakerErrorClassification, error)
+	// GetBreakerDefaults 从全局配置读取并返回熔断器默认参数（含默认值）。
+	GetBreakerDefaults(ctx context.Context) (domainchannel.BreakerDefaults, error)
+	// GetRateLimitDefaults 从全局配置读取并返回限流退避默认参数（含默认值）。
+	GetRateLimitDefaults(ctx context.Context) (domainchannel.RateLimitDefaults, error)
+	DeleteUpstreamCascade(ctx context.Context, upstreamID uint) error
+	DeleteModelCascade(ctx context.Context, modelID uint) error
+}
+
+// ApplyUpstreamModelCatalogChangesInput 描述一次远端目录对账需要持久化的批量变更。
+type ApplyUpstreamModelCatalogChangesInput struct {
+	Create        []domainchannel.UpstreamModel
+	Update        []domainchannel.UpstreamModel
+	InactivateIDs []uint
+}

@@ -1,0 +1,176 @@
+package memory
+
+import (
+	"context"
+	authorityllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
+	"strings"
+	"time"
+
+	appaudit "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/audit"
+	domainmemory "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/memory"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/background"
+)
+
+type embeddingProvider interface {
+	EmbedTextsWithSignature(ctx context.Context, texts []string) ([][]float32, string, error)
+}
+
+type auditWriter interface {
+	Write(ctx context.Context, input appaudit.WriteInput)
+}
+
+// Service 封装记忆业务能力。
+type Service struct {
+	repo             repository.MemoryRepository
+	cacheInvalidator func(userID uint)
+	embedding        embeddingProvider
+	auditWriter      auditWriter
+}
+
+// NewService 创建服务。
+func NewService(repo repository.MemoryRepository) *Service {
+	return &Service{repo: repo}
+}
+
+// SetCacheInvalidator 注入缓存失效回调。每当用户记忆写入成功后调用，通知上层清除本地缓存。
+func (s *Service) SetCacheInvalidator(fn func(userID uint)) {
+	s.cacheInvalidator = fn
+}
+
+// SetEmbeddingProvider 注入可选的向量化能力，用于用户长期记忆的语义检索。
+func (s *Service) SetEmbeddingProvider(provider embeddingProvider) {
+	s.embedding = provider
+}
+
+// SetAuditWriter 注入记忆域审计写入器。
+func (s *Service) SetAuditWriter(writer auditWriter) {
+	s.auditWriter = writer
+}
+
+// RecordAudit 记录记忆域审计日志。
+func (s *Service) RecordAudit(ctx context.Context, input AuditInput) {
+	if s.auditWriter == nil {
+		return
+	}
+	s.auditWriter.Write(ctx, appaudit.WriteInput{
+		RequestID:   input.RequestID,
+		ActorUserID: input.UserID,
+		Action:      input.Action,
+		Resource:    "memory",
+		ResourceID:  input.MemoryKey,
+		IP:          input.ClientIP,
+		UserAgent:   input.UserAgent,
+		Detail:      input.Detail,
+	})
+}
+
+// AuditInput 描述记忆域一次审计写入。
+type AuditInput struct {
+	UserID    uint
+	RequestID string
+	Action    string
+	MemoryKey string
+	ClientIP  string
+	UserAgent string
+	Detail    any
+}
+
+// UpsertUserMemory 新增或更新用户长期记忆。
+func (s *Service) UpsertUserMemory(ctx context.Context, userID uint, key string, value string, scope string, updatedBy string) error {
+	item := &domainmemory.UserMemory{
+		UserID:    userID,
+		MemoryKey: strings.TrimSpace(key),
+		Value:     strings.TrimSpace(value),
+		Scope:     strings.TrimSpace(scope),
+		UpdatedBy: strings.TrimSpace(updatedBy),
+	}
+	if err := s.repo.UpsertUserMemory(ctx, item); err != nil {
+		return err
+	}
+	if s.cacheInvalidator != nil {
+		s.cacheInvalidator(userID)
+	}
+	s.embedUserMemoryAsync(ctx, userID, item.MemoryKey, item.Value)
+	return nil
+}
+
+// DeleteUserMemory 删除用户长期记忆，并失效会话缓存。
+func (s *Service) DeleteUserMemory(ctx context.Context, userID uint, memoryKey string) error {
+	if err := s.repo.DeleteUserMemory(ctx, userID, strings.TrimSpace(memoryKey)); err != nil {
+		return err
+	}
+	if s.cacheInvalidator != nil {
+		s.cacheInvalidator(userID)
+	}
+	return nil
+}
+
+// ListUserMemories 返回用户长期记忆。
+func (s *Service) ListUserMemories(ctx context.Context, userID uint) ([]domainmemory.UserMemory, error) {
+	return s.repo.ListUserMemories(ctx, userID)
+}
+
+// SearchUserMemoriesByEmbedding 语义检索用户记忆（需向量存储支持）。
+func (s *Service) SearchUserMemoriesByEmbedding(ctx context.Context, userID uint, queryEmbedding []float32, embeddingSignature string, topK int, minSimilarity float64) ([]domainmemory.UserMemory, error) {
+	return s.repo.SearchUserMemoriesByEmbedding(ctx, userID, queryEmbedding, embeddingSignature, topK, minSimilarity)
+}
+
+// UpsertUserMemoryEmbedding 更新记忆向量（异步写入，失败静默）。
+func (s *Service) UpsertUserMemoryEmbedding(ctx context.Context, userID uint, memoryKey string, expectedValue string, embedding []float32, embeddingSignature string) error {
+	return s.repo.UpsertUserMemoryEmbedding(ctx, userID, memoryKey, expectedValue, embedding, embeddingSignature)
+}
+
+func prepareMemoryEmbeddingContext(ctx context.Context, resourceOwnerUserID uint, memoryKey string) (context.Context, error) {
+	if ctx == nil {
+		return ctx, authorityllm.ErrTrustedTriggerRequired
+	}
+	subject := authorityllm.ExecutionSubjectFromContext(ctx)
+	if !subject.HasTriggerer() {
+		return ctx, authorityllm.ErrTrustedTriggerRequired
+	}
+	if subject.ResourceOwnerUserID != 0 && resourceOwnerUserID != 0 && subject.ResourceOwnerUserID != resourceOwnerUserID {
+		return ctx, authorityllm.ErrTrustedTriggerMismatch
+	}
+	if strings.TrimSpace(subject.ExecutionID) != "" {
+		childID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(strings.Join([]string{
+			"deeix-chat:memory-embedding",
+			subject.RunID,
+			subject.ExecutionID,
+			strings.TrimSpace(memoryKey),
+		}, "\x00"))).String()
+		return authorityllm.WithTrustedExecutionChild(ctx, childID)
+	}
+	trigger := subject.TrustedTriggerContext
+	trigger.TriggererUserID = subject.TriggererUserID
+	trigger.ResourceOwnerUserID = resourceOwnerUserID
+	trigger.Purpose = "memory.embedding"
+	if strings.TrimSpace(trigger.RunID) == "" {
+		trigger.RunID = "memory_" + uuid.NewString()
+	}
+	trigger.ExecutionID = uuid.NewString()
+	if trigger.CreatedAt.IsZero() {
+		trigger.CreatedAt = time.Now().UTC()
+	}
+	return authorityllm.WithTrustedTriggerContext(ctx, trigger)
+}
+
+func (s *Service) embedUserMemoryAsync(parent context.Context, userID uint, memoryKey string, value string) {
+	if s.embedding == nil || strings.TrimSpace(memoryKey) == "" || strings.TrimSpace(value) == "" {
+		return
+	}
+	background.Go(nil, "embed_user_memory", func() {
+		// 记忆向量是检索增强，不属于写入主事务；失败时保留文本记忆并走关键词兜底。
+		ctx, cancel := background.WithTimeout(parent, 20*time.Second)
+		defer cancel()
+		providerCtx, err := prepareMemoryEmbeddingContext(ctx, userID, memoryKey)
+		if err != nil {
+			return
+		}
+		embeddings, embeddingSignature, err := s.embedding.EmbedTextsWithSignature(providerCtx, []string{value})
+		if err != nil || len(embeddings) == 0 {
+			return
+		}
+		_ = s.repo.UpsertUserMemoryEmbedding(providerCtx, userID, memoryKey, strings.TrimSpace(value), embeddings[0], embeddingSignature)
+	})
+}

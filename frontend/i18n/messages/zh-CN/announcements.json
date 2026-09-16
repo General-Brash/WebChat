@@ -1,0 +1,22 @@
+{
+  "title": "公告",
+  "types": {
+    "critical": "紧急",
+    "warning": "警告",
+    "info": "提示",
+    "normal": "普通",
+    "general": "常规"
+  },
+  "sort": {
+    "default": "默认",
+    "type": "类型",
+    "time": "时间"
+  },
+  "loading": "正在加载公告...",
+  "empty": "暂无当前公告",
+  "openFailed": "公告加载失败",
+  "dismissAllToday": "今日不再显示",
+  "dismissFailed": "公告状态保存失败",
+  "closeFailed": "公告关闭状态保存失败",
+  "close": "关闭"
+}
