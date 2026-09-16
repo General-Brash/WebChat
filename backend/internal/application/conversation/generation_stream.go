@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/textutil"
-	portllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/background"
 	"github.com/google/uuid"
@@ -28,7 +27,6 @@ const (
 	generationStreamCompletionAttempts   = 3
 	generationStreamCompletionRetryDelay = 100 * time.Millisecond
 	generationStreamCompletionMaxDelay   = 5 * time.Second
-	generationStreamCancelPollTimeout    = 2 * time.Second
 )
 
 type generationStreamOptions struct {
@@ -202,22 +200,13 @@ type GenerationStreamEvent struct {
 type activeGeneration struct {
 	userID         uint
 	conversationID string
-	triggerContext portllm.TrustedTriggerContext
 	owner          *generationLifecycleOwner
 	baseCtx        context.Context
 	cancel         context.CancelFunc
-	cancelOnce     sync.Once
 	workerCancel   context.CancelFunc
 	workerStart    chan struct{}
 	workerReady    chan struct{}
 	workerDone     chan struct{}
-}
-
-func (a *activeGeneration) requestCancel() {
-	if a == nil || a.cancel == nil {
-		return
-	}
-	a.cancelOnce.Do(a.cancel)
 }
 
 func (a *activeGeneration) lease(runID string) repository.GenerationStreamLease {
@@ -229,7 +218,6 @@ func (a *activeGeneration) lease(runID string) repository.GenerationStreamLease 
 		ExecutionID:          a.owner.executionID,
 		UserID:               a.userID,
 		ConversationPublicID: a.conversationID,
-		TriggerContext:       a.triggerContext,
 	}
 }
 
@@ -340,7 +328,9 @@ func (r *generationStreamRegistry) close() {
 		r.closeActiveSubscribers()
 		for _, active := range activeGenerations {
 			stopActiveWorker(active)
-			active.requestCancel()
+			if active.cancel != nil {
+				active.cancel()
+			}
 		}
 		r.registrationWG.Wait()
 
@@ -388,31 +378,6 @@ func (r *generationStreamRegistry) register(ctx context.Context, runID string, u
 	if owner == nil || strings.TrimSpace(owner.executionID) == "" {
 		return fail(context.Canceled)
 	}
-	triggerContext := repository.NormalizeTrustedTriggerContext(
-		portllm.ExecutionSubjectFromContext(ctx).TrustedTriggerContext,
-	)
-	if !triggerContext.HasTriggerer() || strings.TrimSpace(triggerContext.Purpose) == "" {
-		return fail(portllm.ErrTrustedTriggerRequired)
-	}
-	if triggerContext.ResourceOwnerUserID != 0 && triggerContext.ResourceOwnerUserID != userID {
-		return fail(portllm.ErrTrustedTriggerMismatch)
-	}
-	if triggerContext.RunID != "" && triggerContext.RunID != runID {
-		return fail(portllm.ErrTrustedTriggerMismatch)
-	}
-	if strings.TrimSpace(triggerContext.ExecutionID) == "" {
-		return fail(portllm.ErrTrustedExecutionChildInvalid)
-	}
-	if triggerContext.ExecutionID != "" {
-		// A durable/replayed lease already has a server-owned execution reference;
-		// restore it rather than inventing a browser/worker replacement.
-		owner.executionID = triggerContext.ExecutionID
-	}
-	triggerContext.RunID = runID
-	triggerContext.ExecutionID = owner.executionID
-	if triggerContext.CreatedAt.IsZero() && triggerContext.TriggererUserID > 0 {
-		triggerContext.CreatedAt = time.Now().UTC()
-	}
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
@@ -433,7 +398,6 @@ func (r *generationStreamRegistry) register(ctx context.Context, runID string, u
 		ExecutionID:          owner.executionID,
 		UserID:               userID,
 		ConversationPublicID: conversationPublicID,
-		TriggerContext:       triggerContext,
 	}
 	if r.store != nil {
 		claimed, err := r.store.ClaimGenerationStream(
@@ -477,7 +441,6 @@ func (r *generationStreamRegistry) register(ctx context.Context, runID string, u
 	active := &activeGeneration{
 		userID:         userID,
 		conversationID: conversationPublicID,
-		triggerContext: triggerContext,
 		owner:          owner,
 		baseCtx:        baseCtx,
 		cancel:         cancel,
@@ -512,8 +475,8 @@ func (r *generationStreamRegistry) cancel(ctx context.Context, userID uint, runI
 		if err != nil || !requested {
 			return false
 		}
-		if active := r.localActive(runID); active != nil && active.userID == userID {
-			active.requestCancel()
+		if active := r.localActive(runID); active != nil && active.userID == userID && active.cancel != nil {
+			active.cancel()
 		}
 		return true
 	}
@@ -521,7 +484,9 @@ func (r *generationStreamRegistry) cancel(ctx context.Context, userID uint, runI
 	if active == nil || active.userID != userID {
 		return false
 	}
-	active.requestCancel()
+	if active.cancel != nil {
+		active.cancel()
+	}
 	return true
 }
 
@@ -531,18 +496,17 @@ func (r *generationStreamRegistry) cancelForced(ctx context.Context, runID strin
 		return false
 	}
 	active := r.localActive(runID)
-	lease, ok := r.leaseForRun(ctx, runID)
-	if !ok {
+	if active == nil {
 		return false
 	}
 	if r.store != nil {
-		requested, err := r.store.RequestGenerationStreamCancel(ctx, runID, lease.UserID, r.options.Retention)
+		requested, err := r.store.RequestGenerationStreamCancel(ctx, runID, active.userID, r.options.Retention)
 		if err != nil || !requested {
 			return false
 		}
 	}
-	if active != nil {
-		active.requestCancel()
+	if active.cancel != nil {
+		active.cancel()
 	}
 	return true
 }
@@ -571,11 +535,11 @@ func (r *generationStreamRegistry) publish(ctx context.Context, runID string, pa
 }
 
 func (r *generationStreamRegistry) publishCurrent(ctx context.Context, runID string, payload map[string]any) {
-	lease, ok := r.leaseForRun(ctx, runID)
-	if !ok {
+	active := r.localActive(runID)
+	if active == nil {
 		return
 	}
-	_, _ = r.publishWithLease(ctx, lease, payload)
+	_, _ = r.publishWithLease(ctx, active.lease(runID), payload)
 }
 
 func (r *generationStreamRegistry) publishWithLease(
@@ -618,11 +582,11 @@ func (r *generationStreamRegistry) resetCurrentEvents(ctx context.Context, runID
 	if runID == "" || r.store == nil {
 		return
 	}
-	lease, ok := r.leaseForRun(ctx, runID)
-	if !ok {
+	active := r.localActive(runID)
+	if active == nil {
 		return
 	}
-	_, _ = r.store.ResetGenerationStreamEvents(ctx, lease)
+	_, _ = r.store.ResetGenerationStreamEvents(ctx, active.lease(runID))
 }
 
 func (r *generationStreamRegistry) append(
@@ -694,16 +658,6 @@ func (r *generationStreamRegistry) subscribeStore(
 		HasUpstreamThinkSnapshot: hasUpstreamThinkSnapshot,
 		IncludeSnapshots:         includeSnapshots,
 	})
-	if terminal {
-		// A terminal event is durable recovery evidence. Let a node serving a
-		// reconnect finish the shared lease even when the original node lost its
-		// in-process completion retry queue.
-		if lease, found := r.leaseForRun(ctx, runID); found {
-			if completed, completeErr := r.completeGenerationStream(ctx, lease); completeErr == nil && completed {
-				r.publishActiveEvent(ctx, lease.UserID, "finished", lease.RunID, lease.ConversationPublicID)
-			}
-		}
-	}
 	if !safe {
 		return nil, nil, nil, false
 	}
@@ -792,24 +746,11 @@ func (r *generationStreamRegistry) finish(ctx context.Context, runID string) {
 	r.mu.Unlock()
 	if ok {
 		stopActiveWorker(active)
-		r.finalizeGeneration(ctx, runID, active)
+	}
+	if active == nil {
 		return
 	}
-
-	// If the local map entry was evicted, the owner token must still match; never
-	// complete a newer lease that another node may have reclaimed for this run.
-	lease, found := r.leaseForRun(ctx, runID)
-	if !found || owner == nil || strings.TrimSpace(owner.executionID) != strings.TrimSpace(lease.ExecutionID) {
-		return
-	}
-	completed, err := r.completeGenerationStream(ctx, lease)
-	if err != nil {
-		r.enqueueCompletion(lease)
-		return
-	}
-	if completed {
-		r.publishActiveEvent(ctx, lease.UserID, "finished", lease.RunID, lease.ConversationPublicID)
-	}
+	r.finalizeGeneration(ctx, runID, active)
 }
 
 func (r *generationStreamRegistry) finalizeGeneration(ctx context.Context, runID string, active *activeGeneration) {
@@ -853,7 +794,7 @@ func (r *generationStreamRegistry) completeGenerationStream(ctx context.Context,
 }
 
 func (r *generationStreamRegistry) enqueueCompletion(lease repository.GenerationStreamLease) {
-	if r == nil || r.store == nil || strings.TrimSpace(lease.RunID) == "" || !lease.TriggerContext.HasTriggerer() {
+	if r == nil || r.store == nil || strings.TrimSpace(lease.RunID) == "" {
 		return
 	}
 	r.completionMu.Lock()
@@ -992,15 +933,6 @@ func (r *generationStreamRegistry) authorized(ctx context.Context, store reposit
 	return ownerID == userID
 }
 
-func (r *generationStreamRegistry) pollCancelMarker(ctx context.Context, runID string) bool {
-	if r == nil || r.store == nil || ctx == nil || strings.TrimSpace(runID) == "" {
-		return false
-	}
-	pollCtx, cancel := context.WithTimeout(ctx, generationStreamCancelPollTimeout)
-	defer cancel()
-	return r.isCanceled(pollCtx, runID)
-}
-
 func (r *generationStreamRegistry) runActiveWorker(ctx context.Context, runID string, active *activeGeneration) {
 	defer r.activeWorkerWG.Done()
 	defer close(active.workerDone)
@@ -1024,16 +956,11 @@ func (r *generationStreamRegistry) runActiveWorker(ctx context.Context, runID st
 	defer expiryTimer.Stop()
 	leaseTicker := time.NewTicker(r.options.LeaseRefresh)
 	defer leaseTicker.Stop()
-	cancelObserved := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-leaseTicker.C:
-			if !cancelObserved && r.pollCancelMarker(ctx, runID) {
-				cancelObserved = true
-				active.requestCancel()
-			}
 			renewed, err := r.renewActiveLease(ctx, runID, active)
 			if err == nil && renewed {
 				leaseValidUntil = time.Now().Add(r.options.LeaseTTL)
@@ -1043,7 +970,9 @@ func (r *generationStreamRegistry) runActiveWorker(ctx context.Context, runID st
 				continue
 			}
 			if r.removeActiveExecution(runID, active) {
-				active.requestCancel()
+				if active.cancel != nil {
+					active.cancel()
+				}
 				cleanupCtx, cleanupCancel := background.WithTimeout(active.baseCtx, generationStreamCleanupTimeout)
 				r.finalizeGeneration(cleanupCtx, runID, active)
 				cleanupCancel()
@@ -1054,7 +983,9 @@ func (r *generationStreamRegistry) runActiveWorker(ctx context.Context, runID st
 			if !expired {
 				return
 			}
-			active.requestCancel()
+			if active.cancel != nil {
+				active.cancel()
+			}
 			cleanupCtx, cleanupCancel := background.WithTimeout(active.baseCtx, generationStreamCleanupTimeout)
 			r.finalizeGeneration(cleanupCtx, runID, active)
 			cleanupCancel()
@@ -1071,9 +1002,8 @@ func (r *generationStreamRegistry) hasActive(ctx context.Context, runID string) 
 		if active, err := r.store.IsGenerationStreamActive(ctx, runID); err == nil && active {
 			return true
 		}
-		return false
 	}
-	return r.localActive(runID) != nil
+	return false
 }
 
 func (r *generationStreamRegistry) renewActiveLease(ctx context.Context, runID string, active *activeGeneration) (bool, error) {
@@ -1097,30 +1027,6 @@ func (r *generationStreamRegistry) localActive(runID string) *activeGeneration {
 	return r.active[runID]
 }
 
-func (r *generationStreamRegistry) leaseForRun(ctx context.Context, runID string) (repository.GenerationStreamLease, bool) {
-	if r == nil {
-		return repository.GenerationStreamLease{}, false
-	}
-	runID = normalizeRunID(runID)
-	if runID == "" {
-		return repository.GenerationStreamLease{}, false
-	}
-	if active := r.localActive(runID); active != nil {
-		lease := active.lease(runID)
-		if strings.TrimSpace(lease.ExecutionID) != "" {
-			return lease, true
-		}
-	}
-	if r.store == nil {
-		return repository.GenerationStreamLease{}, false
-	}
-	lease, ok, err := r.store.GetGenerationStreamLease(ctx, runID)
-	if err != nil || !ok {
-		return repository.GenerationStreamLease{}, false
-	}
-	return lease, true
-}
-
 func (r *generationStreamRegistry) leaseForContext(ctx context.Context, runID string) (repository.GenerationStreamLease, bool) {
 	owner := generationLifecycleOwnerFromContext(ctx)
 	if owner == nil {
@@ -1138,7 +1044,9 @@ func (r *generationStreamRegistry) cancelLocalExecution(runID string, executionI
 	if active == nil || active.owner == nil || active.owner.executionID != executionID {
 		return
 	}
-	active.requestCancel()
+	if active.cancel != nil {
+		active.cancel()
+	}
 }
 
 func (r *generationStreamRegistry) removeActiveExecution(runID string, active *activeGeneration) bool {

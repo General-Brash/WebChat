@@ -32,8 +32,6 @@
   "resendIn": "{seconds}s 后重发",
   "debugCode": "开发验证码：{code}",
   "providerLogin": "使用 {provider} 登录",
-  "sub2Login": "使用 Sub2 登录",
-  "sub2Description": "请使用 Sub2 账号认证。当前已关闭本地密码、注册和普通第三方登录。",
   "alreadyHaveAccount": "已有账号？",
   "noAccount": "没有账号？",
   "toasts": {

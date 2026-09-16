@@ -81,9 +81,6 @@ type ProviderAuthBridgeExchangeInput struct {
 
 // GetProviderAuthBridgeOptions returns the configured OAuth handoff capabilities.
 func (s *Service) GetProviderAuthBridgeOptions() ProviderAuthBridgeOptions {
-	if s.sub2Enabled() {
-		return ProviderAuthBridgeOptions{}
-	}
 	baseURL, err := s.providerAuthBridgeCallbackBaseURL()
 	enabled := s != nil && s.providerAuthBridge != nil && err == nil
 	if !enabled {
@@ -102,9 +99,6 @@ func (s *Service) StartProviderAuthBridge(
 	slug string,
 	input ProviderAuthBridgeStartInput,
 ) (*ProviderAuthBridgeStartResult, error) {
-	if s.sub2Enabled() {
-		return nil, ErrSub2AuthorityRequired
-	}
 	if s == nil || s.providerAuthBridge == nil {
 		return nil, ErrProviderAuthBridgeUnavailable
 	}
@@ -184,9 +178,6 @@ func (s *Service) CompleteProviderAuthBridgeCallback(
 	slug string,
 	input ProviderAuthBridgeCallbackInput,
 ) (*ProviderAuthBridgeCallbackResult, error) {
-	if s.sub2Enabled() {
-		return nil, ErrSub2AuthorityRequired
-	}
 	if s == nil || s.providerAuthBridge == nil {
 		return nil, ErrProviderAuthBridgeUnavailable
 	}
@@ -268,9 +259,6 @@ func (s *Service) ExchangeProviderAuthBridgeGrant(
 	requestID string,
 	auditCtx requestmeta.SessionAuditContext,
 ) (*LoginResult, error) {
-	if s.sub2Enabled() {
-		return nil, ErrSub2AuthorityRequired
-	}
 	if s == nil || s.providerAuthBridge == nil {
 		return nil, ErrProviderAuthBridgeUnavailable
 	}

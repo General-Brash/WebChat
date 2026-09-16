@@ -1,8 +1,6 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { Sub2FinancePanel } from "@/features/sub2/finance-panel";
-import { useSub2Authority } from "@/features/sub2/use-sub2";
 import { useTranslations } from "next-intl";
 import * as React from "react";
 import { toast } from "sonner";
@@ -93,7 +91,7 @@ function SubscriptionTrendSkeleton() {
 type BillingRuntimeConfig = BillingConfigData["config"];
 type PaymentProvider = "stripe" | "epay";
 
-function LocalSettingsSubscription() {
+export function SettingsSubscription() {
   const t = useTranslations("settings.subscriptionPage");
   const resolveErrorMessage = useLocalizedErrorMessage();
   const { locale } = useAppLocale();
@@ -537,12 +535,4 @@ function LocalSettingsSubscription() {
       />
     </SettingsPage>
   );
-}
-
-export function SettingsSubscription() {
-  const authority = useSub2Authority();
-  const { locale } = useAppLocale();
-  if (authority.loading) return <p role="status" className="p-4 text-sm text-muted-foreground">{locale === "zh-CN" ? "正在确认资金权威…" : "Checking billing authority…"}</p>;
-  if (authority.error) return <p role="alert" className="p-4 text-sm text-destructive">{authority.error}</p>;
-  return authority.status?.enabled ? <Sub2FinancePanel status={authority.status} /> : <LocalSettingsSubscription />;
 }

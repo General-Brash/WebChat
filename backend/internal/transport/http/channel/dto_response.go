@@ -11,8 +11,6 @@ import (
 
 // UpstreamResponse 上游响应 DTO。
 type UpstreamResponse struct {
-	Kind                 string                   `json:"kind,omitempty"`
-	Sub2GroupIDs         []int64                  `json:"sub2GroupIDs,omitempty"`
 	ID                   uint                     `json:"id"`
 	Name                 string                   `json:"name"`
 	BaseURL              string                   `json:"baseURL"`
@@ -49,7 +47,6 @@ type UpstreamAPIKeyResponse struct {
 
 func toUpstreamResponse(v appchannel.UpstreamView) UpstreamResponse {
 	return UpstreamResponse{
-		Kind: v.Kind, Sub2GroupIDs: v.Sub2GroupIDs,
 		ID:                   v.ID,
 		Name:                 v.Name,
 		BaseURL:              v.BaseURL,
@@ -405,7 +402,6 @@ type UpstreamRemoteModelResponse struct {
 	SuggestedKindsJSON         string   `json:"suggestedKindsJSON"`
 	SuggestedProtocol          string   `json:"suggestedProtocol"`
 	SuggestedProtocols         []string `json:"suggestedProtocols"`
-	SourceGroupIDs             []int64  `json:"sourceGroupIDs"`
 	BindingCode                string   `json:"bindingCode"`
 	BoundPlatformModels        []string `json:"boundPlatformModels"`
 	UpstreamModelStatus        string   `json:"upstreamModelStatus"`
@@ -440,7 +436,6 @@ func toUpstreamRemoteModelsResponse(d appchannel.UpstreamRemoteModelsData) Upstr
 			SuggestedKindsJSON:         item.SuggestedKindsJSON,
 			SuggestedProtocol:          item.SuggestedProtocol,
 			SuggestedProtocols:         stringList(item.SuggestedProtocols),
-			SourceGroupIDs:             int64List(item.SourceGroupIDs),
 			BindingCode:                item.BindingCode,
 			BoundPlatformModels:        stringList(item.BoundPlatformModels),
 			UpstreamModelStatus:        item.UpstreamModelStatus,
@@ -461,13 +456,6 @@ func toUpstreamRemoteModelsResponse(d appchannel.UpstreamRemoteModelsData) Upstr
 			ProtectedModels:   stringList(d.SyncPlan.ProtectedModels),
 		},
 	}
-}
-
-func int64List(items []int64) []int64 {
-	if items == nil {
-		return []int64{}
-	}
-	return items
 }
 
 func stringList(items []string) []string {

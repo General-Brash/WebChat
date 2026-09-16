@@ -47,16 +47,14 @@ type mediaImageCapabilities struct {
 
 // MediaImageInput 定义媒体图片任务的应用层入参。
 type MediaImageInput struct {
-	UserID            uint
-	ConversationID    uint
-	RequestID         string
-	TaskType          MediaImageTaskType
-	Prompt            string
-	PlatformModelName string
-	Options           map[string]any
-	ClientRunID       string
-	// TriggerContext is server-owned; UserID remains the conversation owner.
-	TriggerContext        *llm.TrustedTriggerContext `json:"-"`
+	UserID                uint
+	ConversationID        uint
+	RequestID             string
+	TaskType              MediaImageTaskType
+	Prompt                string
+	PlatformModelName     string
+	Options               map[string]any
+	ClientRunID           string
 	FileIDs               []string
 	MaskFileID            string
 	ParentMessagePublicID string
@@ -81,27 +79,6 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 	if runID == "" {
 		runID = "run_" + normalizePublicID(uuid.NewString())
 	}
-	ctx, trustedTrigger, err := establishTrustedOperation(
-		ctx,
-		input.TriggerContext,
-		input.UserID,
-		trustedPurposeMediaImage,
-		runID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	ctx, trustedTrigger, err = prepareTrustedProviderRoot(
-		ctx,
-		trustedTrigger,
-		input.UserID,
-		trustedPurposeMediaImage,
-		runID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	input.TriggerContext = &trustedTrigger
 	startedAt := time.Now()
 	conversation, err := s.repo.GetConversationByUser(ctx, input.ConversationID, input.UserID)
 	if err != nil {
@@ -141,22 +118,16 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 		endpoint = llm.EndpointImageEdits
 	}
 	run := &model.Run{
-		RunID:               runID,
-		RequestID:           strings.TrimSpace(input.RequestID),
-		UserID:              input.UserID,
-		TriggererUserID:     trustedTrigger.TriggererUserID,
-		ResourceOwnerUserID: trustedTrigger.ResourceOwnerUserID,
-		Purpose:             trustedTrigger.Purpose,
-		ExecutionID:         strings.TrimSpace(trustedTrigger.ExecutionID),
-		ParentExecutionID:   strings.TrimSpace(trustedTrigger.ParentExecutionID),
-		TriggerCreatedAt:    trustedTriggerCreatedAtPointer(trustedTrigger),
-		ConversationID:      input.ConversationID,
-		TaskType:            string(input.TaskType),
-		Endpoint:            endpoint,
-		Provider:            strings.TrimSpace(conversation.Provider),
-		RequestedModelName:  platformModelName,
-		Status:              "running",
-		StartedAt:           startedAt,
+		RunID:              runID,
+		RequestID:          strings.TrimSpace(input.RequestID),
+		UserID:             input.UserID,
+		ConversationID:     input.ConversationID,
+		TaskType:           string(input.TaskType),
+		Endpoint:           endpoint,
+		Provider:           strings.TrimSpace(conversation.Provider),
+		RequestedModelName: platformModelName,
+		Status:             "running",
+		StartedAt:          startedAt,
 	}
 	if err = s.claimConversationRun(ctx, run); err != nil {
 		return nil, err
@@ -225,7 +196,7 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 		PlatformModelName: platformModelName,
 		TaskType:          taskRouteType,
 		Scope:             channel.RouteScopeUser,
-		UserID:            trustedTrigger.TriggererUserID,
+		UserID:            input.UserID,
 		ConversationID:    input.ConversationID,
 		RequestID:         strings.TrimSpace(input.RequestID),
 	})
@@ -363,7 +334,6 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 		FileIDs:            moderationFileIDs,
 		ClientRunID:        runID,
 		OnEvent:            input.OnEvent,
-		TriggerContext:     trustedTriggerContextPointer(ctx),
 		UsageAuthorization: input.UsageAuthorization,
 	}, runID, userMessage, assistantMessage)
 	emitMediaEvent(input.OnEvent, "queued", "image task queued")
@@ -371,19 +341,17 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 	cfg := s.cfg.Snapshot()
 	attributionReferer, attributionTitle := s.llmAttribution()
 	routeConfig := llm.RouteConfig{
-		UserID: route.UserID, UpstreamID: route.UpstreamID, RetailModel: route.PlatformModelName,
-		Protocol:             route.Protocol,
-		BaseURL:              route.BaseURL,
-		APIKey:               route.APIKey,
-		HeadersJSON:          route.HeadersJSON,
-		ConnectTimeoutMS:     route.ConnectTimeoutMS,
-		ReadTimeoutMS:        route.ReadTimeoutMS,
-		StreamIdleTimeoutMS:  route.StreamIdleTimeoutMS,
-		Endpoint:             endpoint,
-		UpstreamModel:        route.UpstreamModel,
-		UpstreamModelRawJSON: route.UpstreamModelRawJSON,
-		AttributionReferer:   attributionReferer,
-		AttributionTitle:     attributionTitle,
+		Protocol:            route.Protocol,
+		BaseURL:             route.BaseURL,
+		APIKey:              route.APIKey,
+		HeadersJSON:         route.HeadersJSON,
+		ConnectTimeoutMS:    route.ConnectTimeoutMS,
+		ReadTimeoutMS:       route.ReadTimeoutMS,
+		StreamIdleTimeoutMS: route.StreamIdleTimeoutMS,
+		Endpoint:            endpoint,
+		UpstreamModel:       route.UpstreamModel,
+		AttributionReferer:  attributionReferer,
+		AttributionTitle:    attributionTitle,
 	}
 	filteredOptions := filterModelOptions(input.Options, route.Protocol, modelOptionPolicyConfig{
 		Mode:                  cfg.ModelOptionPolicyMode,
@@ -413,8 +381,6 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 
 	emitMediaEvent(input.OnEvent, "running", mediaImageRunningMessage(input.TaskType))
 	generateInput := llm.GenerateInput{
-		UserID: input.UserID, RunID: runID, ExecutionID: trustedTrigger.ExecutionID,
-		TriggerContext: trustedTriggerContextPointer(ctx),
 		RequestID:      strings.TrimSpace(input.RequestID),
 		ConversationID: input.ConversationID,
 		Messages: []llm.Message{{
@@ -435,23 +401,6 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 			Parts: parts,
 		}}
 		generateInput.ImageEditMask = maskPart
-	}
-	providerCtx, providerTrigger, providerErr := prepareTrustedProviderExecution(
-		ctx,
-		&generateInput,
-		input.UserID,
-		trustedPurposeMediaImage,
-		runID,
-	)
-	if providerErr != nil {
-		retErr = providerErr
-		return nil, providerErr
-	}
-	ctx = providerCtx
-	applyTrustedTriggerToRun(run, providerTrigger)
-	if err = s.repo.UpdateConversationRun(ctx, run); err != nil {
-		retErr = err
-		return nil, err
 	}
 	var output *llm.GenerateOutput
 	if mediaImageStreamEnabled(routeConfig.Protocol, routeConfig.UpstreamModel, route.ModelCapabilitiesJSON) {
@@ -500,15 +449,6 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 		s.routeResolver.MarkRouteFailure(ctx, route, err)
 		retErr = wrapUpstreamRequestError(err)
 		_ = s.repo.UpdateMessageState(ctx, assistantMessage.ID, "error", classifyRunErrorCode(retErr), textutil.TruncateTrimmed(messageErrorSummary(retErr), 255))
-		if llm.RequestWasAccepted(err) {
-			pending := buildBillableFailure(retErr, llm.Usage{})
-			if pending != nil {
-				pending.BillingPending = true
-				pending.BillingPendingReason = "authority_query_required"
-				applyMediaRunUsage(run, pending)
-			}
-			return pending, retErr
-		}
 		return nil, retErr
 	}
 	s.routeResolver.MarkRouteSuccess(ctx, route)
@@ -644,25 +584,24 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 	run.ReasoningTokens = usage.ReasoningTokens
 
 	result = &SendMessageResult{
-		UserMessage:           *userMessage,
-		AssistantMessage:      *assistantMessage,
-		MetadataRefreshHint:   s.resolveConversationMetadataRefreshHint(ctx, *conversation, *userMessage),
-		Billable:              true,
-		UpstreamID:            route.UpstreamID,
-		UpstreamName:          route.UpstreamName,
-		PlatformModelName:     route.PlatformModelName,
-		RoutedBindingCode:     route.BindingCode,
-		UpstreamModelName:     route.UpstreamModel,
-		UpstreamProtocol:      route.Protocol,
-		ProviderReturnedModel: strings.TrimSpace(output.ReturnedModel),
-		EffectiveOptions:      filteredOptions,
-		UsageSpeed:            usage.Speed,
-		UsageServiceTier:      usage.ServiceTier,
-		RawUsageJSON:          usage.RawUsageJSON,
-		CacheWrite5mTokens:    usage.CacheWrite5mTokens,
-		CacheWrite1hTokens:    usage.CacheWrite1hTokens,
-		LatencyMS:             latencyMS,
-		StartedAt:             startedAt,
+		UserMessage:         *userMessage,
+		AssistantMessage:    *assistantMessage,
+		MetadataRefreshHint: s.resolveConversationMetadataRefreshHint(ctx, *conversation, *userMessage),
+		Billable:            true,
+		UpstreamID:          route.UpstreamID,
+		UpstreamName:        route.UpstreamName,
+		PlatformModelName:   route.PlatformModelName,
+		RoutedBindingCode:   route.BindingCode,
+		UpstreamModelName:   route.UpstreamModel,
+		UpstreamProtocol:    route.Protocol,
+		EffectiveOptions:    filteredOptions,
+		UsageSpeed:          usage.Speed,
+		UsageServiceTier:    usage.ServiceTier,
+		RawUsageJSON:        usage.RawUsageJSON,
+		CacheWrite5mTokens:  usage.CacheWrite5mTokens,
+		CacheWrite1hTokens:  usage.CacheWrite1hTokens,
+		LatencyMS:           latencyMS,
+		StartedAt:           startedAt,
 	}
 	if moderationCoord != nil {
 		outputImages := loadOutputImagesFromFiles(moderationCoord, uploaded, generatedBytesByFileID)

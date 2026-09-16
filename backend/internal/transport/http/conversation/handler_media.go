@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 
 	appconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/conversation"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/background"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/response"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/middleware"
@@ -271,14 +270,6 @@ func (h *Handler) streamMediaTask(
 		}
 		// 终态事件已发出，结算/释放失败由应用层记日志并标记对账，不能再向流推送第二个终态事件。
 		_ = session.Finish(c.Request.Context(), result)
-		return
-	}
-	if result == nil && llm.RequestWasAccepted(err) {
-		// The media service normally returns a BillingPending result so Sub2 can
-		// write its pending receipt projection. Keep this defensive path from
-		// releasing a reservation when an older/alternate service path only
-		// returns the accepted/UNKNOWN error; UsageSession.Close leaves it for
-		// expiry/reconciliation.
 		return
 	}
 	if billingErr := session.Finish(c.Request.Context(), result); billingErr != nil {

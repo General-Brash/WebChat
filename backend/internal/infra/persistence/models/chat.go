@@ -192,51 +192,44 @@ func (Attachment) TableName() string {
 // FileObject 存储文件对象元信息。
 type FileObject struct {
 	BaseModel
-	FileID                        string     `gorm:"size:64;not null;default:'';uniqueIndex:idx_file_objects_file_id;comment:文件对象ID"`
-	UserID                        uint       `gorm:"not null;default:0;index:idx_file_objects_user_id;comment:所属用户ID，平台文件为0"`
-	ProcessingTriggererUserID     uint       `gorm:"not null;default:0;index:idx_file_objects_processing_triggerer_user_id;comment:当前处理任务的可信触发人ID，0表示缺失"`
-	ProcessingResourceOwnerUserID uint       `gorm:"not null;default:0;index:idx_file_objects_processing_resource_owner_user_id;comment:当前处理任务的资源所有者ID，平台资源为0"`
-	ProcessingPurpose             string     `gorm:"size:64;not null;default:'';comment:当前处理任务的服务端用途"`
-	ProcessingRunID               string     `gorm:"size:64;not null;default:'';index:idx_file_objects_processing_run_id;comment:当前处理任务的逻辑运行ID"`
-	ProcessingExecutionID         string     `gorm:"size:64;not null;default:'';index:idx_file_objects_processing_execution_id;comment:当前处理任务的执行引用"`
-	ProcessingParentExecutionID   string     `gorm:"size:64;not null;default:'';index:idx_file_objects_processing_parent_execution_id;comment:当前处理任务的可信父执行引用"`
-	ProcessingTriggerCreatedAt    *time.Time `gorm:"comment:当前处理任务的可信触发创建时间"`
-	Purpose                       string     `gorm:"size:32;not null;default:'';comment:文件用途"`
-	FileName                      string     `gorm:"size:255;not null;default:'';comment:文件名"`
-	MimeType                      string     `gorm:"size:128;not null;default:'';comment:客户端声明媒体类型"`
-	DetectedMIME                  string     `gorm:"size:128;not null;default:'';index:idx_file_objects_detected_mime;comment:后端探测媒体类型"`
-	FileCategory                  string     `gorm:"size:32;not null;default:'unknown';index:idx_file_objects_file_category;comment:文件分类(image/pdf/word/presentation/excel/text/unknown)"`
-	SizeBytes                     int64      `gorm:"not null;default:0;comment:文件大小(Byte)"`
-	SHA256                        string     `gorm:"size:64;not null;default:'';index:idx_file_objects_sha256;comment:文件SHA256"`
-	StoragePath                   string     `gorm:"size:512;not null;default:'';comment:存储路径"`
-	Status                        string     `gorm:"size:32;not null;default:'active';index:idx_file_objects_status;comment:文件状态"`
-	LastAccessedAt                *time.Time `gorm:"index:idx_file_objects_last_accessed_at;comment:最近使用时间"`
-	ExpiresAt                     *time.Time `gorm:"index:idx_file_objects_expires_at;comment:过期时间"`
-	ProcessingStatus              string     `gorm:"size:32;not null;default:'uploaded';index:idx_file_objects_processing_status;comment:文件处理状态(uploaded/queued/extracting/extracted/embedding/ready/failed)"`
-	ProcessingReady               bool       `gorm:"not null;default:false;index:idx_file_objects_processing_ready;comment:是否可用于对话"`
-	ProcessingErrorCode           string     `gorm:"size:64;not null;default:'';comment:文件处理错误码"`
-	ProcessingErrorMessage        string     `gorm:"size:255;not null;default:'';comment:文件处理错误信息"`
-	ExtractStatus                 string     `gorm:"size:16;not null;default:'none';index:idx_file_objects_extract_status;comment:文本提取状态(none/processing/ready/failed)"`
-	ExtractEngine                 string     `gorm:"size:64;not null;default:'';comment:提取引擎"`
-	ExtractStoragePath            string     `gorm:"size:512;not null;default:'';comment:提取文本存储路径"`
-	ExtractChars                  int        `gorm:"not null;default:0;comment:提取字符数"`
-	ExtractPages                  int        `gorm:"not null;default:0;comment:提取页数"`
-	PreviewText                   string     `gorm:"type:text;not null;default:'';comment:提取预览文本"`
-	OCRUsed                       bool       `gorm:"not null;default:false;comment:是否使用OCR"`
-	RAGReady                      bool       `gorm:"not null;default:false;comment:RAG是否就绪"`
-	RAGReason                     string     `gorm:"size:255;not null;default:'';comment:RAG处理说明"`
-	EmbedStatus                   string     `gorm:"size:16;not null;default:'none';index:idx_file_objects_embed_status;comment:向量嵌入状态(none/queued/processing/ready/stale/failed)"`
-	EmbedSignature                string     `gorm:"size:64;not null;default:'';index:idx_file_objects_embed_signature;comment:当前向量任务所属空间签名"`
-	EmbedError                    string     `gorm:"type:text;not null;default:'';comment:嵌入失败原因"`
-	PageCount                     int        `gorm:"not null;default:0;comment:PDF页数"`
-	ChunkCount                    int        `gorm:"not null;default:0;comment:分片数量"`
-	ExtractorVersion              string     `gorm:"size:32;not null;default:'';comment:提取器版本"`
-	ExtractedAt                   *time.Time `gorm:"comment:文本提取完成时间"`
-	ProcessingPayloadJSON         string     `gorm:"type:text;not null;default:'';comment:文件处理扩展负载JSON"`
-	ProcessingAttemptID           string     `gorm:"size:64;not null;default:'';comment:当前文件处理执行令牌"`
-	ProcessingStartedAt           *time.Time `gorm:"comment:处理开始时间"`
-	ProcessingCompletedAt         *time.Time `gorm:"comment:处理完成时间"`
-	RAGOptOut                     bool       `gorm:"not null;default:false;comment:用户是否关闭此文件的RAG检索"`
+	FileID                 string     `gorm:"size:64;not null;default:'';uniqueIndex:idx_file_objects_file_id;comment:文件对象ID"`
+	UserID                 uint       `gorm:"not null;default:0;index:idx_file_objects_user_id;comment:所属用户ID，平台文件为0"`
+	Purpose                string     `gorm:"size:32;not null;default:'';comment:文件用途"`
+	FileName               string     `gorm:"size:255;not null;default:'';comment:文件名"`
+	MimeType               string     `gorm:"size:128;not null;default:'';comment:客户端声明媒体类型"`
+	DetectedMIME           string     `gorm:"size:128;not null;default:'';index:idx_file_objects_detected_mime;comment:后端探测媒体类型"`
+	FileCategory           string     `gorm:"size:32;not null;default:'unknown';index:idx_file_objects_file_category;comment:文件分类(image/pdf/word/presentation/excel/text/unknown)"`
+	SizeBytes              int64      `gorm:"not null;default:0;comment:文件大小(Byte)"`
+	SHA256                 string     `gorm:"size:64;not null;default:'';index:idx_file_objects_sha256;comment:文件SHA256"`
+	StoragePath            string     `gorm:"size:512;not null;default:'';comment:存储路径"`
+	Status                 string     `gorm:"size:32;not null;default:'active';index:idx_file_objects_status;comment:文件状态"`
+	LastAccessedAt         *time.Time `gorm:"index:idx_file_objects_last_accessed_at;comment:最近使用时间"`
+	ExpiresAt              *time.Time `gorm:"index:idx_file_objects_expires_at;comment:过期时间"`
+	ProcessingStatus       string     `gorm:"size:32;not null;default:'uploaded';index:idx_file_objects_processing_status;comment:文件处理状态(uploaded/queued/extracting/extracted/embedding/ready/failed)"`
+	ProcessingReady        bool       `gorm:"not null;default:false;index:idx_file_objects_processing_ready;comment:是否可用于对话"`
+	ProcessingErrorCode    string     `gorm:"size:64;not null;default:'';comment:文件处理错误码"`
+	ProcessingErrorMessage string     `gorm:"size:255;not null;default:'';comment:文件处理错误信息"`
+	ExtractStatus          string     `gorm:"size:16;not null;default:'none';index:idx_file_objects_extract_status;comment:文本提取状态(none/processing/ready/failed)"`
+	ExtractEngine          string     `gorm:"size:64;not null;default:'';comment:提取引擎"`
+	ExtractStoragePath     string     `gorm:"size:512;not null;default:'';comment:提取文本存储路径"`
+	ExtractChars           int        `gorm:"not null;default:0;comment:提取字符数"`
+	ExtractPages           int        `gorm:"not null;default:0;comment:提取页数"`
+	PreviewText            string     `gorm:"type:text;not null;default:'';comment:提取预览文本"`
+	OCRUsed                bool       `gorm:"not null;default:false;comment:是否使用OCR"`
+	RAGReady               bool       `gorm:"not null;default:false;comment:RAG是否就绪"`
+	RAGReason              string     `gorm:"size:255;not null;default:'';comment:RAG处理说明"`
+	EmbedStatus            string     `gorm:"size:16;not null;default:'none';index:idx_file_objects_embed_status;comment:向量嵌入状态(none/queued/processing/ready/stale/failed)"`
+	EmbedSignature         string     `gorm:"size:64;not null;default:'';index:idx_file_objects_embed_signature;comment:当前向量任务所属空间签名"`
+	EmbedError             string     `gorm:"type:text;not null;default:'';comment:嵌入失败原因"`
+	PageCount              int        `gorm:"not null;default:0;comment:PDF页数"`
+	ChunkCount             int        `gorm:"not null;default:0;comment:分片数量"`
+	ExtractorVersion       string     `gorm:"size:32;not null;default:'';comment:提取器版本"`
+	ExtractedAt            *time.Time `gorm:"comment:文本提取完成时间"`
+	ProcessingPayloadJSON  string     `gorm:"type:text;not null;default:'';comment:文件处理扩展负载JSON"`
+	ProcessingAttemptID    string     `gorm:"size:64;not null;default:'';comment:当前文件处理执行令牌"`
+	ProcessingStartedAt    *time.Time `gorm:"comment:处理开始时间"`
+	ProcessingCompletedAt  *time.Time `gorm:"comment:处理完成时间"`
+	RAGOptOut              bool       `gorm:"not null;default:false;comment:用户是否关闭此文件的RAG检索"`
 }
 
 // TableName 指定表名。
@@ -285,12 +278,6 @@ type ConversationRun struct {
 	RunID                    string     `gorm:"size:64;not null;default:'';uniqueIndex:idx_chat_runs_run_id;comment:运行ID"`
 	RequestID                string     `gorm:"size:64;not null;default:'';index:idx_chat_runs_request_id;comment:请求ID"`
 	UserID                   uint       `gorm:"not null;default:0;index:idx_chat_runs_user_id;comment:用户ID"`
-	TriggererUserID          uint       `gorm:"not null;default:0;index:idx_chat_runs_triggerer_user_id;comment:可信触发人ID，0表示历史记录缺失"`
-	ResourceOwnerUserID      uint       `gorm:"not null;default:0;index:idx_chat_runs_resource_owner_user_id;comment:资源所有者ID，独立于触发人"`
-	Purpose                  string     `gorm:"size:64;not null;default:'';comment:运行的服务端用途"`
-	ExecutionID              string     `gorm:"size:64;not null;default:'';index:idx_chat_runs_execution_id;comment:运行的执行引用"`
-	ParentExecutionID        string     `gorm:"size:64;not null;default:'';index:idx_chat_runs_parent_execution_id;comment:运行的可信父执行引用"`
-	TriggerCreatedAt         *time.Time `gorm:"comment:可信触发创建时间"`
 	ConversationID           uint       `gorm:"not null;default:0;index:idx_chat_runs_conversation_id;comment:会话ID"`
 	TaskType                 string     `gorm:"size:32;not null;default:'chat';index:idx_chat_runs_task_type;comment:任务类型"`
 	Endpoint                 string     `gorm:"size:32;not null;default:'';index:idx_chat_runs_endpoint;comment:调用端点"`

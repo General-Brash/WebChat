@@ -1,26 +1,5 @@
 basePath: /api/v1
 definitions:
-  ActionRequest:
-    properties:
-      command:
-        type: object
-      executionID:
-        type: string
-      id:
-        type: integer
-      idempotencyKey:
-        type: string
-      payloadFingerprint:
-        type: string
-      query:
-        type: string
-      requestKey:
-        type: string
-      runID:
-        type: string
-      targetUserID:
-        type: integer
-    type: object
   ActiveMessageGenerationEventResponse:
     properties:
       conversationPublicID:
@@ -785,38 +764,6 @@ definitions:
     - updatedAt
     - username
     - usernameChangedAt
-    type: object
-  AuthorityResponseDoc:
-    properties:
-      data:
-        additionalProperties: true
-        type: object
-    required:
-    - data
-    type: object
-  AuthorityStatusData:
-    properties:
-      enabled:
-        type: boolean
-      groupRevision:
-        type: integer
-      issuer:
-        type: string
-      paidReady:
-        type: boolean
-      playerVersion:
-        type: integer
-      pricingVersion:
-        type: integer
-    required:
-    - enabled
-    type: object
-  AuthorityStatusDoc:
-    properties:
-      data:
-        $ref: '#/definitions/AuthorityStatusData'
-    required:
-    - data
     type: object
   BatchDeleteRedemptionCodeDataResponse:
     properties:
@@ -2984,11 +2931,6 @@ definitions:
       headersJSON:
         maxLength: 10000
         type: string
-      kind:
-        enum:
-        - direct
-        - sub2
-        type: string
       name:
         maxLength: 128
         minLength: 2
@@ -3005,10 +2947,6 @@ definitions:
         type: string
       streamIdleTimeoutMS:
         type: integer
-      sub2GroupIDs:
-        items:
-          type: integer
-        type: array
     required:
     - apiKeys
     - baseURL
@@ -4230,12 +4168,6 @@ definitions:
         items:
           $ref: '#/definitions/IdentityProviderResponse'
         type: array
-      ssoOnly:
-        type: boolean
-      sub2AuthorityEnabled:
-        type: boolean
-      sub2LoginPath:
-        type: string
       turnstileRegistrationEnabled:
         type: boolean
       turnstileSiteKey:
@@ -4249,9 +4181,6 @@ definitions:
     - passwordResetEnabled
     - providerAuthBridge
     - providers
-    - ssoOnly
-    - sub2AuthorityEnabled
-    - sub2LoginPath
     - turnstileRegistrationEnabled
     - turnstileSiteKey
     - usernameEnabled
@@ -8466,11 +8395,6 @@ definitions:
       headersJSON:
         maxLength: 10000
         type: string
-      kind:
-        enum:
-        - direct
-        - sub2
-        type: string
       name:
         maxLength: 128
         minLength: 2
@@ -8487,10 +8411,6 @@ definitions:
         type: string
       streamIdleTimeoutMS:
         type: integer
-      sub2GroupIDs:
-        items:
-          type: integer
-        type: array
     type: object
   UpdateUpstreamResponseDoc:
     properties:
@@ -8964,10 +8884,6 @@ definitions:
         items:
           type: string
         type: array
-      sourceGroupIDs:
-        items:
-          type: integer
-        type: array
       suggestedKindsJSON:
         type: string
       suggestedPlatformModelName:
@@ -8987,7 +8903,6 @@ definitions:
     - alreadySynced
     - bindingCode
     - boundPlatformModels
-    - sourceGroupIDs
     - suggestedKindsJSON
     - suggestedPlatformModelName
     - suggestedProtocol
@@ -9059,8 +8974,6 @@ definitions:
         type: string
       id:
         type: integer
-      kind:
-        type: string
       modelsCount:
         type: integer
       name:
@@ -9073,10 +8986,6 @@ definitions:
         type: string
       streamIdleTimeoutMS:
         type: integer
-      sub2GroupIDs:
-        items:
-          type: integer
-        type: array
       updatedAt:
         type: string
     required:
@@ -14789,34 +14698,6 @@ paths:
       summary: 管理员更新内置技能
       tags:
       - admin-skills
-  /admin/sub2/{operation}:
-    post:
-      consumes:
-      - application/json
-      parameters:
-      - description: Allowlisted administrative operation
-        in: path
-        name: operation
-        required: true
-        type: string
-      - description: Operator command
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/ActionRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/AuthorityResponseDoc'
-      security:
-      - BearerAuth: []
-      summary: Execute an authorized Sub2 application or financial command
-      tags:
-      - sub2
   /admin/system-events:
     get:
       consumes:
@@ -19165,67 +19046,6 @@ paths:
       summary: 更新我的自定义技能
       tags:
       - skills
-  /sub2/{operation}:
-    post:
-      consumes:
-      - application/json
-      description: Operations are explicitly allowlisted; identity is derived server-side.
-        Unknown money results are not replayed.
-      parameters:
-      - description: Operation
-        enum:
-        - wallet
-        - execution
-        - services-query
-        - cancel
-        - finance-config
-        - finance-plans
-        - finance-quote
-        - finance-purchase
-        - finance-checkout
-        - finance-orders
-        - finance-order
-        - finance-ledger
-        - finance-redeem
-        - finance-redemptions
-        - finance-refund-request
-        - finance-subscriptions
-        in: path
-        name: operation
-        required: true
-        type: string
-      - description: Command; never contains a subject assertion or provider key
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/ActionRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/AuthorityResponseDoc'
-      security:
-      - BearerAuth: []
-      summary: Execute a scoped Sub2 user operation
-      tags:
-      - sub2
-  /sub2/status:
-    get:
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/AuthorityStatusDoc'
-      security:
-      - BearerAuth: []
-      summary: Read Sub2 authority status
-      tags:
-      - sub2
   /temporary-chat/messages/stream:
     post:
       consumes:

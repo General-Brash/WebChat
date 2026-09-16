@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	portllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 )
 
@@ -14,7 +13,6 @@ type generationStream struct {
 	ownerID               uint
 	executionID           string
 	conversationID        string
-	triggerContext        portllm.TrustedTriggerContext
 	ownerExpiresAt        time.Time
 	activeExpiresAt       time.Time
 	cancelExpiresAt       time.Time
@@ -40,19 +38,7 @@ func (c *Cache) ClaimGenerationStream(
 	lease.RunID = strings.TrimSpace(lease.RunID)
 	lease.ExecutionID = strings.TrimSpace(lease.ExecutionID)
 	lease.ConversationPublicID = strings.TrimSpace(lease.ConversationPublicID)
-	lease.TriggerContext = repository.NormalizeTrustedTriggerContext(lease.TriggerContext)
-	if lease.RunID == "" ||
-		lease.ExecutionID == "" ||
-		lease.UserID == 0 ||
-		lease.ConversationPublicID == "" ||
-		!lease.TriggerContext.HasTriggerer() ||
-		strings.TrimSpace(lease.TriggerContext.Purpose) == "" ||
-		lease.TriggerContext.RunID != lease.RunID ||
-		lease.TriggerContext.ExecutionID != lease.ExecutionID ||
-		lease.TriggerContext.CreatedAt.IsZero() {
-		return false, nil
-	}
-	if lease.TriggerContext.ResourceOwnerUserID != 0 && lease.TriggerContext.ResourceOwnerUserID != lease.UserID {
+	if lease.RunID == "" || lease.ExecutionID == "" || lease.UserID == 0 || lease.ConversationPublicID == "" {
 		return false, nil
 	}
 	if ownershipTTL < leaseTTL {
@@ -66,19 +52,13 @@ func (c *Cache) ClaimGenerationStream(
 		if !stream.activeExpired(now) &&
 			stream.executionID == lease.ExecutionID &&
 			stream.ownerID == lease.UserID &&
-			stream.conversationID == lease.ConversationPublicID &&
-			repository.SameTrustedTriggerContext(stream.triggerContext, lease.TriggerContext) {
+			stream.conversationID == lease.ConversationPublicID {
 			stream.ownerExpiresAt = ttlFromNow(ownershipTTL)
 			stream.activeExpiresAt = ttlFromNow(leaseTTL)
 			c.notifyGenerationStreamsLocked()
 			return true, nil
 		}
 		if !stream.activeExpired(now) || !stream.ownerExpired(now) {
-			return false, nil
-		}
-		// A lease reclaim may change execution ownership, but it cannot change
-		// the actor or logical operation while the stream record remains.
-		if !repository.SameTrustedTriggerContext(stream.triggerContext, lease.TriggerContext) {
 			return false, nil
 		}
 		stream.resetEventsLocked()
@@ -88,7 +68,6 @@ func (c *Cache) ClaimGenerationStream(
 	stream.ownerID = lease.UserID
 	stream.executionID = lease.ExecutionID
 	stream.conversationID = lease.ConversationPublicID
-	stream.triggerContext = lease.TriggerContext
 	stream.ownerExpiresAt = ttlFromNow(ownershipTTL)
 	stream.activeExpiresAt = ttlFromNow(leaseTTL)
 	stream.cancelExpiresAt = time.Time{}
@@ -110,34 +89,6 @@ func (c *Cache) GetGenerationStreamOwner(ctx context.Context, runID string) (uin
 	return stream.ownerID, true, nil
 }
 
-// GetGenerationStreamLease returns the active shared lease, including the
-// immutable attribution envelope needed by cross-instance callers.
-func (c *Cache) GetGenerationStreamLease(_ context.Context, runID string) (repository.GenerationStreamLease, bool, error) {
-	if c == nil {
-		return repository.GenerationStreamLease{}, false, nil
-	}
-	runID = strings.TrimSpace(runID)
-	if runID == "" {
-		return repository.GenerationStreamLease{}, false, nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	stream := c.streams[runID]
-	now := time.Now()
-	if stream == nil || stream.ownerID == 0 || strings.TrimSpace(stream.executionID) == "" ||
-		strings.TrimSpace(stream.conversationID) == "" || stream.activeExpired(now) || stream.ownerExpired(now) ||
-		!stream.triggerContext.HasTriggerer() || strings.TrimSpace(stream.triggerContext.Purpose) == "" || stream.triggerContext.CreatedAt.IsZero() || stream.triggerContext.RunID != runID || stream.triggerContext.ExecutionID != stream.executionID {
-		return repository.GenerationStreamLease{}, false, nil
-	}
-	return repository.GenerationStreamLease{
-		RunID:                runID,
-		ExecutionID:          stream.executionID,
-		UserID:               stream.ownerID,
-		ConversationPublicID: stream.conversationID,
-		TriggerContext:       stream.triggerContext,
-	}, true, nil
-}
-
 // RenewGenerationStreamLease extends the active and ownership leases for a stream.
 func (c *Cache) RenewGenerationStreamLease(
 	_ context.Context,
@@ -152,11 +103,10 @@ func (c *Cache) RenewGenerationStreamLease(
 	defer c.mu.Unlock()
 	stream := c.streams[strings.TrimSpace(lease.RunID)]
 	now := time.Now()
-	if !lease.TriggerContext.HasTriggerer() || stream == nil ||
+	if stream == nil ||
 		stream.executionID != strings.TrimSpace(lease.ExecutionID) ||
 		stream.ownerID != lease.UserID ||
 		stream.conversationID != strings.TrimSpace(lease.ConversationPublicID) ||
-		!repository.SameTrustedTriggerContext(stream.triggerContext, lease.TriggerContext) ||
 		stream.activeExpired(now) {
 		return false, nil
 	}
@@ -172,11 +122,10 @@ func (c *Cache) CompleteGenerationStream(_ context.Context, lease repository.Gen
 	defer c.mu.Unlock()
 	stream := c.streams[strings.TrimSpace(lease.RunID)]
 	now := time.Now()
-	if !lease.TriggerContext.HasTriggerer() || stream == nil ||
+	if stream == nil ||
 		stream.executionID != strings.TrimSpace(lease.ExecutionID) ||
 		stream.ownerID != lease.UserID ||
 		stream.conversationID != strings.TrimSpace(lease.ConversationPublicID) ||
-		!repository.SameTrustedTriggerContext(stream.triggerContext, lease.TriggerContext) ||
 		stream.ownerExpired(now) {
 		return false, nil
 	}
@@ -198,14 +147,10 @@ func (c *Cache) AbandonGenerationStream(_ context.Context, lease repository.Gene
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	lease.RunID = strings.TrimSpace(lease.RunID)
-	if !lease.TriggerContext.HasTriggerer() {
-		return false, nil
-	}
 	stream := c.streams[lease.RunID]
 	if stream == nil ||
 		stream.executionID != strings.TrimSpace(lease.ExecutionID) ||
 		stream.ownerID != lease.UserID ||
-		!repository.SameTrustedTriggerContext(stream.triggerContext, lease.TriggerContext) ||
 		stream.activeExpired(time.Now()) {
 		return false, nil
 	}
@@ -276,15 +221,9 @@ func (c *Cache) AppendGenerationStreamEvent(
 ) (repository.GenerationStreamMessage, bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !lease.TriggerContext.HasTriggerer() {
-		return repository.GenerationStreamMessage{}, false, nil
-	}
 	stream := c.streams[strings.TrimSpace(lease.RunID)]
 	now := time.Now()
-	if stream == nil ||
-		stream.executionID != strings.TrimSpace(lease.ExecutionID) ||
-		!repository.SameTrustedTriggerContext(stream.triggerContext, lease.TriggerContext) ||
-		stream.activeExpired(now) {
+	if stream == nil || stream.executionID != strings.TrimSpace(lease.ExecutionID) || stream.activeExpired(now) {
 		return repository.GenerationStreamMessage{}, false, nil
 	}
 	record := appendGenerationStreamEventLocked(stream, input, maxEvents, ttl)
@@ -454,14 +393,8 @@ func (c *Cache) notifyGenerationStreamsLocked() {
 func (c *Cache) ResetGenerationStreamEvents(_ context.Context, lease repository.GenerationStreamLease) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !lease.TriggerContext.HasTriggerer() {
-		return false, nil
-	}
 	stream := c.streams[strings.TrimSpace(lease.RunID)]
-	if stream == nil ||
-		stream.executionID != strings.TrimSpace(lease.ExecutionID) ||
-		!repository.SameTrustedTriggerContext(stream.triggerContext, lease.TriggerContext) ||
-		stream.activeExpired(time.Now()) {
+	if stream == nil || stream.executionID != strings.TrimSpace(lease.ExecutionID) || stream.activeExpired(time.Now()) {
 		return false, nil
 	}
 	stream.resetEventsLocked()

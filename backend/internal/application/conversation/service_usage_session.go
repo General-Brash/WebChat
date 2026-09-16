@@ -2,12 +2,10 @@ package conversation
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
 
 	domainbilling "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/billing"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/background"
 	"go.uber.org/zap"
 )
@@ -35,17 +33,6 @@ type UsageSession struct {
 func (s *Service) BeginUsageSession(ctx context.Context, input SendMessageBillingInput) (*UsageSession, error) {
 	if ctx == nil {
 		ctx = context.Background()
-	}
-	if s.billingSvc != nil {
-		triggererUserID, err := canonicalTriggererUserID(ctx, input.TriggerContext)
-		if err != nil {
-			return nil, err
-		}
-		if input.TriggerContext == nil {
-			trigger := llm.ExecutionSubjectFromContext(ctx).TrustedTriggerContext
-			trigger.TriggererUserID = triggererUserID
-			input.TriggerContext = &trigger
-		}
 	}
 	authorization, err := s.AuthorizeSendMessageUsage(ctx, input)
 	if err != nil {
@@ -77,9 +64,6 @@ func (u *UsageSession) Finish(ctx context.Context, result *SendMessageResult) er
 	if u.stopRenewal != nil {
 		u.stopRenewal()
 	}
-	if result != nil && result.BillingPending {
-		return u.holdForAuthorityReconciliation(ctx, result)
-	}
 	if result != nil && result.Billable {
 		return u.settle(ctx, result)
 	}
@@ -104,29 +88,6 @@ func (u *UsageSession) markFinished() bool {
 	}
 	u.finished = true
 	return true
-}
-
-func (u *UsageSession) holdForAuthorityReconciliation(ctx context.Context, result *SendMessageResult) error {
-	if u.service == nil || u.service.billingSvc == nil {
-		return nil
-	}
-	// Sub2 owns the authoritative execution and usage result. Record a pending
-	// receipt projection through the normal settlement path; BuildSub2UsageLedger
-	// queries authority and never promotes estimated media usage to a debit.
-	if u.service.billingSvc.IsSub2BillingAuthority() {
-		return u.settle(ctx, result)
-	}
-	reconcileCtx, cancel := background.WithTimeout(ctx, usageSessionSettleTimeout)
-	defer cancel()
-	reason := strings.TrimSpace(result.BillingPendingReason)
-	if reason == "" {
-		reason = "authority_query_required"
-	}
-	if err := u.service.billingSvc.MarkUsageAuthorizationForReconciliation(reconcileCtx, u.authorization, reason); err != nil {
-		u.logFailure("usage_session_reconciliation_hold_failed", err)
-		return err
-	}
-	return nil
 }
 
 func (u *UsageSession) settle(ctx context.Context, result *SendMessageResult) error {
@@ -163,13 +124,8 @@ func (u *UsageSession) logFailure(event string, err error) {
 	if u.service.logger == nil {
 		return
 	}
-	triggererUserID := uint(0)
-	if u.input.TriggerContext != nil {
-		triggererUserID = u.input.TriggerContext.TriggererUserID
-	}
 	fields := []zap.Field{
 		zap.Uint("user_id", u.input.UserID),
-		zap.Uint("triggerer_user_id", triggererUserID),
 		zap.Uint("conversation_id", u.input.ConversationID),
 		zap.String("client_run_id", u.input.ClientRunID),
 		zap.Error(err),

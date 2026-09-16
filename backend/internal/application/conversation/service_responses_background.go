@@ -11,37 +11,9 @@ import (
 )
 
 type openAIResponsesBackgroundRecoveryState struct {
-	Enabled        bool
-	ResponseID     string
-	ObservedUsage  llm.Usage
-	TriggerContext llm.TrustedTriggerContext
-}
-
-func trustedResponsesRecoveryContext(parent context.Context, trigger llm.TrustedTriggerContext) (context.Context, bool) {
-	if parent == nil {
-		parent = context.Background()
-	}
-	subject := llm.ExecutionSubjectFromContext(parent)
-	if subject.HasTriggerer() {
-		if trigger.TriggererUserID == 0 || subject.TriggererUserID != trigger.TriggererUserID {
-			return parent, false
-		}
-		if trigger.RunID != "" && subject.RunID != "" && trigger.RunID != subject.RunID {
-			return parent, false
-		}
-		if trigger.ExecutionID != "" && subject.ExecutionID != "" && trigger.ExecutionID != subject.ExecutionID {
-			return parent, false
-		}
-		return parent, true
-	}
-	if !trigger.HasTriggerer() {
-		return parent, false
-	}
-	bound, err := llm.WithTrustedTriggerContext(parent, trigger)
-	if err != nil {
-		return parent, false
-	}
-	return bound, true
+	Enabled       bool
+	ResponseID    string
+	ObservedUsage llm.Usage
 }
 
 func (s *Service) recoverOpenAIResponsesBackgroundUsage(parent context.Context, route llm.RouteConfig, state openAIResponsesBackgroundRecoveryState) (llm.Usage, bool) {
@@ -50,11 +22,7 @@ func (s *Service) recoverOpenAIResponsesBackgroundUsage(parent context.Context, 
 		return llm.Usage{}, false
 	}
 
-	recoveryCtx, ok := trustedResponsesRecoveryContext(parent, state.TriggerContext)
-	if !ok {
-		return llm.Usage{}, false
-	}
-	ctx, cancel := background.WithTimeout(recoveryCtx, 8*time.Second)
+	ctx, cancel := background.WithTimeout(parent, 8*time.Second)
 	defer cancel()
 
 	var cancelErr error

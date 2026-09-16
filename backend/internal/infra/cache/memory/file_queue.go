@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	portllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 )
 
@@ -45,14 +44,13 @@ func (c *Cache) InitFileProcessingStream(ctx context.Context) error {
 }
 
 // EnqueueFileProcessing queues a file for extraction and processing.
-func (c *Cache) EnqueueFileProcessing(ctx context.Context, userID uint, fileID string, retry int, lastError string, trigger ...portllm.TrustedTriggerContext) error {
+func (c *Cache) EnqueueFileProcessing(ctx context.Context, userID uint, fileID string, retry int, lastError string) error {
 	return c.enqueueFileMessage(ctx, repository.FileProcessingMessage{
-		UserID:         userID,
-		FileID:         fileID,
-		Retry:          retry,
-		LastError:      lastError,
-		Queue:          repository.FileProcessingQueueDefault,
-		TriggerContext: firstTrustedTriggerContext(trigger),
+		UserID:    userID,
+		FileID:    fileID,
+		Retry:     retry,
+		LastError: lastError,
+		Queue:     repository.FileProcessingQueueDefault,
 	})
 }
 
@@ -63,7 +61,6 @@ func (c *Cache) EnqueueFileEmbedding(
 	fileID string,
 	embeddingSignature string,
 	embeddingHost string,
-	trigger ...portllm.TrustedTriggerContext,
 ) error {
 	fileID = strings.TrimSpace(fileID)
 	embeddingSignature = strings.TrimSpace(embeddingSignature)
@@ -78,7 +75,6 @@ func (c *Cache) EnqueueFileEmbedding(
 		Queue:              repository.FileProcessingQueueEmbedding,
 		EmbeddingSignature: embeddingSignature,
 		EmbeddingHost:      embeddingHost,
-		TriggerContext:     firstTrustedTriggerContext(trigger),
 	})
 }
 
@@ -101,7 +97,6 @@ func (c *Cache) enqueueFileMessage(ctx context.Context, message repository.FileP
 	message.ID = strconv.FormatInt(c.fileSeq, 10)
 	message.FileID = strings.TrimSpace(message.FileID)
 	message.LastError = truncateFileQueueError(message.LastError)
-	message.TriggerContext = repository.NormalizeTrustedTriggerContext(message.TriggerContext)
 	msg := message
 	state.queue = append(state.queue, msg)
 	notifyFileQueueLocked(state)
@@ -216,9 +211,6 @@ func (c *Cache) RenewFileProcessingMessageLease(ctx context.Context, consumerNam
 	if !exists || lease.consumerName != strings.TrimSpace(consumerName) {
 		return false, nil
 	}
-	if !sameFileProcessingMessage(message, lease.message) {
-		return false, nil
-	}
 	lease.leasedAt = time.Now()
 	state.inflight[messageID] = lease
 	return true, nil
@@ -238,9 +230,6 @@ func (c *Cache) SettleFileProcessingMessage(ctx context.Context, consumerName st
 	messageID := strings.TrimSpace(message.ID)
 	lease, exists := state.inflight[messageID]
 	if !exists || lease.consumerName != strings.TrimSpace(consumerName) {
-		return false, nil
-	}
-	if !sameFileProcessingMessage(message, lease.message) {
 		return false, nil
 	}
 	delete(state.inflight, messageID)
@@ -270,23 +259,18 @@ func (c *Cache) RequeueFileProcessingMessage(
 	if !exists || lease.consumerName != strings.TrimSpace(consumerName) {
 		return false, nil
 	}
-	if !sameFileProcessingMessage(message, lease.message) {
-		return false, nil
-	}
-	stored := lease.message
 	// 重入队不受 maxFileQueueLength 限制：消息只是从 inflight 移回队列，总量无净增长。
 	c.fileSeq++
 	state.queue = append(state.queue, repository.FileProcessingMessage{
 		ID:                 strconv.FormatInt(c.fileSeq, 10),
-		UserID:             stored.UserID,
-		FileID:             strings.TrimSpace(stored.FileID),
+		UserID:             message.UserID,
+		FileID:             strings.TrimSpace(message.FileID),
 		Retry:              retry,
 		LastError:          truncateFileQueueError(lastError),
-		Kind:               stored.Kind,
-		Queue:              queueForMessage(stored),
-		EmbeddingSignature: stored.EmbeddingSignature,
-		EmbeddingHost:      stored.EmbeddingHost,
-		TriggerContext:     stored.TriggerContext,
+		Kind:               message.Kind,
+		Queue:              queueForMessage(message),
+		EmbeddingSignature: message.EmbeddingSignature,
+		EmbeddingHost:      message.EmbeddingHost,
 	})
 	delete(state.inflight, messageID)
 	notifyFileQueueLocked(state)
@@ -315,22 +299,17 @@ func (c *Cache) DeadLetterFileProcessingMessage(
 	if !exists || lease.consumerName != strings.TrimSpace(consumerName) {
 		return false, nil
 	}
-	if !sameFileProcessingMessage(message, lease.message) {
-		return false, nil
-	}
-	stored := lease.message
 	c.fileSeq++
 	state.dlq = append(state.dlq, repository.FileProcessingMessage{
 		ID:                 "dlq-" + strconv.FormatInt(c.fileSeq, 10),
-		UserID:             stored.UserID,
-		FileID:             strings.TrimSpace(stored.FileID),
-		Retry:              stored.Retry,
+		UserID:             message.UserID,
+		FileID:             strings.TrimSpace(message.FileID),
+		Retry:              message.Retry,
 		LastError:          truncateFileQueueError(lastError),
-		Kind:               stored.Kind,
-		Queue:              queueForMessage(stored),
-		EmbeddingSignature: stored.EmbeddingSignature,
-		EmbeddingHost:      stored.EmbeddingHost,
-		TriggerContext:     stored.TriggerContext,
+		Kind:               message.Kind,
+		Queue:              queueForMessage(message),
+		EmbeddingSignature: message.EmbeddingSignature,
+		EmbeddingHost:      message.EmbeddingHost,
 	})
 	if len(state.dlq) > 10_000 {
 		state.dlq = append([]repository.FileProcessingMessage(nil), state.dlq[len(state.dlq)-10_000:]...)
@@ -355,28 +334,6 @@ func queueForMessage(message repository.FileProcessingMessage) repository.FilePr
 		return repository.FileProcessingQueueEmbedding
 	}
 	return repository.FileProcessingQueueDefault
-}
-
-func firstTrustedTriggerContext(items []portllm.TrustedTriggerContext) portllm.TrustedTriggerContext {
-	if len(items) == 0 {
-		return portllm.TrustedTriggerContext{}
-	}
-	return repository.NormalizeTrustedTriggerContext(items[0])
-}
-
-// sameFileProcessingMessage is the memory backend's CAS guard. Retry/error and
-// reclaim flags are mutable; task identity, embedding signature and trusted
-// attribution are not. A forged current-worker envelope therefore cannot
-// replace the stored actor before requeue/dead-letter.
-func sameFileProcessingMessage(left, right repository.FileProcessingMessage) bool {
-	return strings.TrimSpace(left.ID) == strings.TrimSpace(right.ID) &&
-		left.UserID == right.UserID &&
-		strings.TrimSpace(left.FileID) == strings.TrimSpace(right.FileID) &&
-		left.Kind == right.Kind &&
-		queueForMessage(left) == queueForMessage(right) &&
-		strings.TrimSpace(left.EmbeddingSignature) == strings.TrimSpace(right.EmbeddingSignature) &&
-		strings.TrimRight(strings.TrimSpace(left.EmbeddingHost), "/") == strings.TrimRight(strings.TrimSpace(right.EmbeddingHost), "/") &&
-		repository.SameTrustedTriggerContext(left.TriggerContext, right.TriggerContext)
 }
 
 func notifyFileQueueLocked(state *fileQueueState) {

@@ -138,24 +138,6 @@ func (s *Service) normalizeUpstreamAvailability(ctx context.Context, view *Upstr
 
 // CreateUpstream 创建上游。
 func (s *Service) CreateUpstream(ctx context.Context, input CreateUpstreamInput) (*UpstreamView, error) {
-	if input.Kind == "" {
-		input.Kind = "direct"
-	}
-	groupsJSON, groupErr := normalizeSub2GroupIDs(input.Sub2GroupIDs)
-	if groupErr != nil {
-		return nil, groupErr
-	}
-	if input.Kind == "sub2" {
-		if !s.cfg.Snapshot().UsesSub2Authority() {
-			return nil, ErrInvalidCompatible
-		}
-		input.BaseURL = s.cfg.Snapshot().Sub2BaseURL
-		input.APIKeys = sub2RoutingMarkerKeys
-		input.HeadersJSON = "{}"
-	} else if input.Kind != "direct" {
-		return nil, ErrInvalidCompatible
-	}
-
 	if err := validateOptionalJSON(strings.TrimSpace(input.HeadersJSON)); err != nil {
 		return nil, ErrInvalidHeadersConfig
 	}
@@ -187,7 +169,6 @@ func (s *Service) CreateUpstream(ctx context.Context, input CreateUpstreamInput)
 	}
 
 	item := &domainchannel.Upstream{
-		Kind: input.Kind, Sub2GroupIDsJSON: groupsJSON,
 		Name:                 strings.TrimSpace(input.Name),
 		BaseURL:              strings.TrimSpace(input.BaseURL),
 		Compatible:           compatible,
@@ -216,44 +197,6 @@ func (s *Service) CreateUpstream(ctx context.Context, input CreateUpstreamInput)
 // UpdateUpstream 更新上游配置。
 func (s *Service) UpdateUpstream(ctx context.Context, upstreamID uint, input UpdateUpstreamInput) (*UpstreamView, error) {
 	updateInput := repository.UpdateChannelUpstreamInput{}
-	current, loadErr := s.repo.GetUpstreamByID(ctx, upstreamID)
-	if loadErr != nil {
-		return nil, loadErr
-	}
-	kind := current.Kind
-	if input.Kind != nil {
-		kind = *input.Kind
-	}
-	if kind == "" {
-		kind = "direct"
-	}
-	if kind != "direct" && kind != "sub2" {
-		return nil, ErrInvalidCompatible
-	}
-	if kind == "sub2" {
-		if !s.cfg.Snapshot().UsesSub2Authority() {
-			return nil, ErrInvalidCompatible
-		}
-		base := s.cfg.Snapshot().Sub2BaseURL
-		keys := sub2RoutingMarkerKeys
-		headers := "{}"
-		input.BaseURL = &base
-		input.APIKeys = &keys
-		input.AddAPIKeys = nil
-		input.DeleteAPIKeyIDs = nil
-		input.HeadersJSON = &headers
-	}
-	if input.Kind != nil {
-		updateInput.Kind = &kind
-	}
-	if input.Sub2GroupIDs != nil {
-		raw, err := normalizeSub2GroupIDs(*input.Sub2GroupIDs)
-		if err != nil {
-			return nil, err
-		}
-		updateInput.Sub2GroupIDsJSON = &raw
-	}
-
 	if input.Name != nil {
 		name := strings.TrimSpace(*input.Name)
 		updateInput.Name = &name

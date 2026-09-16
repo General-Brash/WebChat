@@ -4,8 +4,6 @@ import "time"
 
 // LLMUpstream 存储上游配置。
 type LLMUpstream struct {
-	Kind             string `gorm:"size:16;not null;default:direct"`
-	Sub2GroupIDsJSON string `gorm:"type:text;not null;default:'[]'"`
 	ControlPlaneModel
 	Name                 string `gorm:"size:128;not null;default:'';comment:上游名称"`
 	BaseURL              string `gorm:"size:512;not null;default:'';comment:上游服务地址"`

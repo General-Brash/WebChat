@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -554,7 +553,6 @@ func parseOpenAIGenerateOutput(endpoint string, adapter string, body []byte, all
 func buildGenerateOutputFromParsedForAdapter(endpoint string, adapter string, parsed map[string]any, allowTextEncodedToolCalls bool) *portllm.GenerateOutput {
 	result := &portllm.GenerateOutput{
 		ResponseID:      strings.TrimSpace(getString(parsed["id"])),
-		ReturnedModel:   strings.TrimSpace(getString(parsed["model"])),
 		Text:            "",
 		Usage:           portllm.Usage{},
 		ToolCalls:       make([]portllm.ToolCall, 0),
@@ -572,9 +570,6 @@ func buildGenerateOutputFromParsedForAdapter(endpoint string, adapter string, pa
 	if result.ResponseID == "" {
 		result.ResponseID = strings.TrimSpace(getStringFromPath(parsed, "response", "id"))
 	}
-	if result.ReturnedModel == "" {
-		result.ReturnedModel = strings.TrimSpace(getStringFromPath(parsed, "response", "model"))
-	}
 	if result.Text == "" {
 		result.Text = getString(parsed["text"])
 	}
@@ -584,11 +579,8 @@ func buildGenerateOutputFromParsedForAdapter(endpoint string, adapter string, pa
 func parseOpenAIModelList(body []byte) ([]portllm.ModelItem, error) {
 	parsed := struct {
 		Data []struct {
-			ID             string   `json:"id"`
-			OwnedBy        string   `json:"owned_by"`
-			DisplayName    string   `json:"display_name"`
-			Protocols      []string `json:"protocols"`
-			SourceGroupIDs []int64  `json:"source_group_ids"`
+			ID      string `json:"id"`
+			OwnedBy string `json:"owned_by"`
 		} `json:"data"`
 	}{}
 	if err := json.Unmarshal(body, &parsed); err != nil {
@@ -602,55 +594,11 @@ func parseOpenAIModelList(body []byte) ([]portllm.ModelItem, error) {
 			continue
 		}
 		results = append(results, portllm.ModelItem{
-			ID:             modelID,
-			OwnedBy:        strings.TrimSpace(item.OwnedBy),
-			DisplayName:    strings.TrimSpace(item.DisplayName),
-			Protocols:      normalizeModelMetadataStrings(item.Protocols),
-			SourceGroupIDs: normalizeModelMetadataInt64s(item.SourceGroupIDs),
+			ID:      modelID,
+			OwnedBy: strings.TrimSpace(item.OwnedBy),
 		})
 	}
 	return results, nil
-}
-
-func normalizeModelMetadataStrings(values []string) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(values))
-	result := make([]string, 0, len(values))
-	for _, raw := range values {
-		value := strings.TrimSpace(strings.ToLower(raw))
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	sort.Strings(result)
-	return result
-}
-
-func normalizeModelMetadataInt64s(values []int64) []int64 {
-	if len(values) == 0 {
-		return nil
-	}
-	seen := make(map[int64]struct{}, len(values))
-	result := make([]int64, 0, len(values))
-	for _, value := range values {
-		if value <= 0 {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
-	return result
 }
 
 func mergeGenerateOutput(dst *portllm.GenerateOutput, src *portllm.GenerateOutput) {
@@ -659,9 +607,6 @@ func mergeGenerateOutput(dst *portllm.GenerateOutput, src *portllm.GenerateOutpu
 	}
 	if dst.ResponseID == "" {
 		dst.ResponseID = strings.TrimSpace(src.ResponseID)
-	}
-	if dst.ReturnedModel == "" {
-		dst.ReturnedModel = strings.TrimSpace(src.ReturnedModel)
 	}
 	if dst.Text == "" {
 		dst.Text = src.Text

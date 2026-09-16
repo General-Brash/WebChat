@@ -55,19 +55,17 @@ func (s *Service) reasoningContentPassbackEnabled(ctx context.Context, userID ui
 
 func messageRouteConfig(route *channel.ResolvedRoute, attributionReferer string, attributionTitle string) llm.RouteConfig {
 	return llm.RouteConfig{
-		UserID: route.UserID, UpstreamID: route.UpstreamID, RetailModel: route.PlatformModelName,
-		Protocol:             route.Protocol,
-		BaseURL:              route.BaseURL,
-		APIKey:               route.APIKey,
-		HeadersJSON:          route.HeadersJSON,
-		ConnectTimeoutMS:     route.ConnectTimeoutMS,
-		ReadTimeoutMS:        route.ReadTimeoutMS,
-		StreamIdleTimeoutMS:  route.StreamIdleTimeoutMS,
-		Endpoint:             llm.DefaultEndpointForAdapter(route.Protocol),
-		UpstreamModel:        route.UpstreamModel,
-		UpstreamModelRawJSON: route.UpstreamModelRawJSON,
-		AttributionReferer:   attributionReferer,
-		AttributionTitle:     attributionTitle,
+		Protocol:            route.Protocol,
+		BaseURL:             route.BaseURL,
+		APIKey:              route.APIKey,
+		HeadersJSON:         route.HeadersJSON,
+		ConnectTimeoutMS:    route.ConnectTimeoutMS,
+		ReadTimeoutMS:       route.ReadTimeoutMS,
+		StreamIdleTimeoutMS: route.StreamIdleTimeoutMS,
+		Endpoint:            llm.DefaultEndpointForAdapter(route.Protocol),
+		UpstreamModel:       route.UpstreamModel,
+		AttributionReferer:  attributionReferer,
+		AttributionTitle:    attributionTitle,
 	}
 }
 
@@ -179,33 +177,6 @@ func (s *Service) sendMessageInternal(
 	if runID == "" {
 		runID = "run_" + normalizePublicID(uuid.NewString())
 	}
-	// Bind the verified actor once to the logical operation. UserID remains the
-	// conversation/resource owner and never becomes the payer by itself.
-	var trustedTrigger llm.TrustedTriggerContext
-	var err error
-	ctx, trustedTrigger, err = establishTrustedOperation(
-		ctx,
-		input.TriggerContext,
-		input.UserID,
-		trustedPurposeChatMain,
-		runID,
-	)
-	if err != nil {
-		retErr = err
-		return nil, err
-	}
-	ctx, trustedTrigger, err = prepareTrustedProviderRoot(
-		ctx,
-		trustedTrigger,
-		input.UserID,
-		trustedPurposeChatMain,
-		runID,
-	)
-	if err != nil {
-		retErr = err
-		return nil, err
-	}
-	input.TriggerContext = &trustedTrigger
 	var moderationCoord *appcm.RunCoordinator
 
 	conversation, err := s.repo.GetConversationByUser(ctx, input.ConversationID, input.UserID)
@@ -253,7 +224,7 @@ func (s *Service) sendMessageInternal(
 		maxLLMCalls:  s.resolveMaxLLMCallsPerRun(),
 		usage:        &messageUsageAccumulator{},
 	}
-	runState := newMessageSendRunState(s, input, conversation, startedAt, runID, trustedTrigger)
+	runState := newMessageSendRunState(s, input, conversation, startedAt, runID)
 	run := runState.run
 	runState.reuseUserMessage = reuseUserMessage
 	runState.bind(&userMessage, &assistantMessage, &traceRecorder, &result, ctx)
@@ -270,7 +241,7 @@ func (s *Service) sendMessageInternal(
 			retainedOutput := false
 			usageRecovered := false
 			if errors.Is(retErr, ErrMessageGenerationCanceled) || llm.RequestWasAccepted(retErr) {
-				if usage, ok := s.recoverOpenAIResponsesBackgroundUsage(runner.trustedContext, runner.routeConfig, runner.responsesBackgroundRecovery); ok {
+				if usage, ok := s.recoverOpenAIResponsesBackgroundUsage(ctx, runner.routeConfig, runner.responsesBackgroundRecovery); ok {
 					usageRecovered = true
 					if delta := diffLLMUsage(usage, runner.responsesBackgroundRecovery.ObservedUsage); delta != (llm.Usage{}) {
 						runner.usage.addObservedUsage(delta)
@@ -394,7 +365,7 @@ func (s *Service) sendMessageInternal(
 		PlatformModelName: conversation.Model,
 		TaskType:          channel.TaskTypeChat,
 		Scope:             channel.RouteScopeUser,
-		UserID:            trustedTrigger.TriggererUserID,
+		UserID:            input.UserID,
 		ConversationID:    input.ConversationID,
 		RequestID:         strings.TrimSpace(input.RequestID),
 	}
@@ -404,7 +375,7 @@ func (s *Service) sendMessageInternal(
 		return nil, retErr
 	}
 	runState.route = route
-	reasoningContentPassback := s.reasoningContentPassbackEnabled(ctx, trustedTrigger.TriggererUserID, route)
+	reasoningContentPassback := s.reasoningContentPassbackEnabled(ctx, input.UserID, route)
 	if modelChanged || strings.TrimSpace(conversation.Model) != strings.TrimSpace(route.PlatformModelName) {
 		conversation.Model = strings.TrimSpace(route.PlatformModelName)
 		conversation.Provider = inferProvider(conversation.Model)
@@ -419,7 +390,7 @@ func (s *Service) sendMessageInternal(
 	}
 
 	cfg := s.cfg.Snapshot()
-	compactPolicy := s.resolveContextCompactionPolicy(ctx, cfg, trustedTrigger.TriggererUserID)
+	compactPolicy := s.resolveContextCompactionPolicy(ctx, cfg, input.UserID)
 
 	// 并行预取：Snapshot + UserMemory 提前加载，隐藏 DB 延迟。
 	type prefetchData struct {
@@ -441,7 +412,7 @@ func (s *Service) sendMessageInternal(
 	// 读取用户的文件处理模式偏好（auto / full_context / rag）。
 	fileMode := "auto"
 	capability := s.resolveChatFileCapability(ctx)
-	if fm, fmErr := s.getUserSettingCached(ctx, trustedTrigger.TriggererUserID, "chat.file_mode"); fmErr == nil && fm != "" {
+	if fm, fmErr := s.getUserSettingCached(ctx, input.UserID, "chat.file_mode"); fmErr == nil && fm != "" {
 		fileMode = fm
 	}
 
@@ -490,19 +461,14 @@ func (s *Service) sendMessageInternal(
 		PlatformModelName: s.resolveTextTaskModel(ctx, textTaskRouteInput{
 			ConfiguredModel:   cfg.CompactTaskModel,
 			ConversationModel: conversation.Model,
-			UserID:            trustedTrigger.TriggererUserID,
+			UserID:            input.UserID,
 			ConversationID:    input.ConversationID,
 			RequestID:         input.RequestID,
 		}),
-		Force:          true,
-		TriggerContext: trustedTriggerContextPointer(ctx),
+		Force: true,
 	}
 	if compactPolicy.EffectiveEnabled() && s.compactSvc.ContextBudgetExceeded(preflightCompactInput) {
-		// Preflight compaction is a paid basic service just like post-billing
-		// compaction. Bind the same user/conversation billing context before the
-		// summarizer can authorize or call an upstream model.
-		preflightBillingCtx := withBasicServiceBillingContext(ctx, input.UserID, input.ConversationID)
-		preflightSnapshot, compactErr := s.compactSvc.MaybeCompactConversation(preflightBillingCtx, preflightCompactInput)
+		preflightSnapshot, compactErr := s.compactSvc.MaybeCompactConversation(ctx, preflightCompactInput)
 		if compactErr != nil {
 			retErr = compactErr
 			return nil, compactErr
@@ -762,25 +728,6 @@ func (s *Service) sendMessageInternal(
 		retErr = err
 		return nil, err
 	}
-	// The provider root was allocated before the Run and generation lease. Keep
-	// the exact same server-approved identity on the first request; later rounds
-	// are explicit trusted children in the generation runner.
-	providerCtx, providerTrigger, providerErr := prepareTrustedProviderExecution(
-		ctx,
-		&plan.generateInput,
-		input.UserID,
-		trustedPurposeChatMain,
-		runID,
-	)
-	if providerErr != nil {
-		retErr = providerErr
-		return nil, providerErr
-	}
-	ctx = providerCtx
-	trustedTrigger = providerTrigger
-	runner.trustedContext = providerCtx
-	runner.trustedTrigger = providerTrigger
-	runState.persistRun(ctx)
 
 	upstreamOutput, err := runner.runRouteAttempt(ctx, &plan, sendSpan)
 	if generationCanceled(ctx, err) {
@@ -912,11 +859,7 @@ func (s *Service) sendMessageInternal(
 			route.ModelCapabilitiesJSON,
 			cfg.ContextWindowFallbackTokens,
 		)
-		toolParentCtx := runner.currentTrustedContext()
-		if toolParentCtx == nil {
-			toolParentCtx = ctx
-		}
-		toolCtx, toolSpan := platformtracing.Start(toolParentCtx, "conversation.tool.execute",
+		toolCtx, toolSpan := platformtracing.Start(ctx, "conversation.tool.execute",
 			trace.WithAttributes(
 				attribute.Int64("conversation.id", int64(input.ConversationID)),
 				attribute.Int64("user.id", int64(input.UserID)),
@@ -1188,7 +1131,6 @@ func (s *Service) sendMessageInternal(
 		PromptTokenEstimate: plan.fullContextPromptTokens + effectiveOutputTokens,
 		ContextModelName:    route.UpstreamModel,
 		CapabilitiesJSON:    route.ModelCapabilitiesJSON,
-		TriggerContext:      trustedTriggerContextPointer(runner.trustedContext),
 	}
 	var postBillingCompaction *postBillingCompactionTask
 	if !compactPolicy.EffectiveEnabled() || !s.compactSvc.ShouldCompactConversation(compactInput) {
@@ -1201,7 +1143,7 @@ func (s *Service) sendMessageInternal(
 		compactPlatformModelName := s.resolveTextTaskModel(ctx, textTaskRouteInput{
 			ConfiguredModel:   compactCfg.CompactTaskModel,
 			ConversationModel: conversation.Model,
-			UserID:            trustedTrigger.TriggererUserID,
+			UserID:            input.UserID,
 			ConversationID:    input.ConversationID,
 			RequestID:         input.RequestID,
 		})
@@ -1248,7 +1190,6 @@ func (s *Service) sendMessageInternal(
 		RoutedBindingCode:     route.BindingCode,
 		UpstreamModelName:     route.UpstreamModel,
 		UpstreamProtocol:      route.Protocol,
-		ProviderReturnedModel: strings.TrimSpace(upstreamOutput.ReturnedModel),
 		EffectiveOptions:      filteredOptions,
 		UsageSpeed:            totalUsage.Speed,
 		UsageServiceTier:      totalUsage.ServiceTier,

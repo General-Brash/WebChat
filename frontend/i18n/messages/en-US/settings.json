@@ -336,9 +336,7 @@
       "regenerateRecoveryCodesFailed": "Failed to regenerate recovery codes",
       "providerUnavailable": "This identity provider is not available for binding.",
       "bindIdentityFailed": "Failed to bind identity provider"
-    },
-    "sub2Managed": "Manage in Sub2",
-    "sub2ManagedDescription": "Authentication security is managed by the Sub2 account authority."
+    }
   },
   "chatPage": {
     "defaultModel": {

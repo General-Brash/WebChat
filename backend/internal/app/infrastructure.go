@@ -102,19 +102,13 @@ type healthChecker struct {
 	db          *gorm.DB
 	cacheDriver string
 	redis       *redis.Client
-	sub2        sub2Readiness
 }
 
-func newHealthChecker(db *gorm.DB, cacheDriver string, redisClient *redis.Client, sub2 ...sub2Readiness) platformhttp.HealthChecker {
-	var sub2Check sub2Readiness
-	if len(sub2) > 0 {
-		sub2Check = sub2[0]
-	}
+func newHealthChecker(db *gorm.DB, cacheDriver string, redisClient *redis.Client) platformhttp.HealthChecker {
 	return &healthChecker{
 		db:          db,
 		cacheDriver: strings.ToLower(strings.TrimSpace(cacheDriver)),
 		redis:       redisClient,
-		sub2:        sub2Check,
 	}
 }
 
@@ -159,14 +153,6 @@ func (h *healthChecker) CheckHealth(ctx context.Context) ([]platformhttp.HealthC
 	default:
 		checks = append(checks, platformhttp.HealthCheck{Name: "cache", Status: "unsupported"})
 		healthy = false
-	}
-
-	if h.sub2 != nil {
-		ready, status := h.sub2.CheckReadiness()
-		checks = append(checks, platformhttp.HealthCheck{Name: "sub2_authority", Status: status})
-		if !ready {
-			healthy = false
-		}
 	}
 
 	return checks, healthy

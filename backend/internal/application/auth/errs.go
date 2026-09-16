@@ -8,8 +8,6 @@ const ProviderEmailConflictActionSignInThenBind = "sign_in_then_bind"
 var (
 	// ErrInvalidCredentials 用户名或密码错误。
 	ErrInvalidCredentials = apperr.New("auth.invalid_credentials", "invalid username or password")
-	// ErrSub2AuthorityRequired indicates that local authentication is disabled in Sub2 authority mode.
-	ErrSub2AuthorityRequired = apperr.New("auth.sub2_authority_required", "Sub2 is the authentication authority")
 	// ErrAccountLocked 账户已被锁定。
 	ErrAccountLocked = apperr.NewMasked("auth.invalid_credentials", "invalid username or password", "account locked")
 	// ErrInvalidTimeZone 用户时区格式非法。

@@ -9,11 +9,9 @@ import (
 
 	appembedding "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/embedding"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/extraction"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/filetrigger"
 	domainconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/textutil"
-	authorityllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/apperr"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/background"
@@ -184,7 +182,6 @@ func (s *Service) SubmitFileEmbeddings(
 			job.FileID,
 			job.EmbeddingSignature,
 			job.EmbeddingHost,
-			job.TriggerContext,
 		)
 		if err == nil {
 			result.SubmittedFileIDs = append(result.SubmittedFileIDs, job.FileID)
@@ -221,7 +218,6 @@ func (s *Service) InitializeUploadedFile(ctx context.Context, fileObj *domaincon
 	if fileObj == nil {
 		return nil
 	}
-	trigger := filetrigger.ContextFromFileObject(*fileObj)
 	if fileObj.FileCategory == "video" || (fileObj.FileCategory == "image" && !s.snapshot().ExtractImageOCREnabled) {
 		fileObj.ProcessingStatus = "ready"
 		fileObj.ProcessingReady = true
@@ -230,7 +226,7 @@ func (s *Service) InitializeUploadedFile(ctx context.Context, fileObj *domaincon
 		if fileObj.FileCategory == "video" {
 			ragReason = "video_not_applicable"
 		}
-		return s.repo.UpdateFileObjectProcessingState(ctx, s.readyWithoutExtractionState(fileObj, ragReason, trigger))
+		return s.repo.UpdateFileObjectProcessingState(ctx, s.readyWithoutExtractionState(fileObj, ragReason))
 	}
 
 	if !supportsExtraction(fileObj.FileCategory) {
@@ -238,7 +234,7 @@ func (s *Service) InitializeUploadedFile(ctx context.Context, fileObj *domaincon
 	}
 
 	now := time.Now()
-	if err := s.repo.UpdateFileObjectProcessingState(ctx, filetrigger.ApplyToProcessingState(&domainconversation.FileObjectProcessing{
+	if err := s.repo.UpdateFileObjectProcessingState(ctx, &domainconversation.FileObjectProcessing{
 		FileObjectID:     fileObj.ID,
 		UserID:           fileObj.UserID,
 		DetectedMIME:     fileObj.DetectedMIME,
@@ -248,10 +244,10 @@ func (s *Service) InitializeUploadedFile(ctx context.Context, fileObj *domaincon
 		ExtractStatus:    "none",
 		ExtractorVersion: s.version(),
 		StartedAt:        &now,
-	}, trigger)); err != nil {
+	}); err != nil {
 		return err
 	}
-	if err := s.enqueueFileProcessing(ctx, fileObj.UserID, fileObj.FileID, 0, "", trigger); err != nil {
+	if err := s.enqueueFileProcessing(ctx, fileObj.UserID, fileObj.FileID, 0, ""); err != nil {
 		code := "queue_unavailable"
 		if errors.Is(err, repository.ErrFileProcessingQueueFull) {
 			code = "queue_full"
@@ -280,23 +276,10 @@ func (s *Service) processFile(
 	fileID string,
 	allowRecovery bool,
 	attemptID string,
-	trigger ...authorityllm.TrustedTriggerContext,
 ) (bool, error) {
 	fileObj, err := s.repo.GetActiveFileObjectByID(ctx, userID, fileID)
 	if err != nil || fileObj == nil {
 		return false, err
-	}
-	effectiveTrigger := filetrigger.ContextFromFileObject(*fileObj)
-	if len(trigger) > 0 {
-		effectiveTrigger = trigger[0]
-	}
-	if repository.HasTrustedTriggerMetadata(effectiveTrigger) {
-		var restored authorityllm.TrustedTriggerContext
-		ctx, restored, err = filetrigger.Restore(ctx, effectiveTrigger)
-		if err != nil {
-			return false, err
-		}
-		effectiveTrigger = restored
 	}
 	if fileObj.ProcessingStatus == "ready" || fileObj.ProcessingStatus == "failed" {
 		return false, nil
@@ -308,7 +291,6 @@ func (s *Service) processFile(
 		allowRecovery,
 		s.version(),
 		attemptID,
-		effectiveTrigger,
 	)
 	if err != nil || !claimed {
 		return false, err
@@ -317,19 +299,18 @@ func (s *Service) processFile(
 		return true, s.updateClaimedFileProcessingState(
 			ctx,
 			attemptID,
-			s.readyWithoutExtractionState(fileObj, "image_not_applicable", effectiveTrigger),
+			s.readyWithoutExtractionState(fileObj, "image_not_applicable"),
 		)
 	}
-	return true, s.processClaimedFile(ctx, fileObj, attemptID, effectiveTrigger)
+	return true, s.processClaimedFile(ctx, fileObj, attemptID)
 }
 
 func (s *Service) readyWithoutExtractionState(
 	fileObj *domainconversation.FileObject,
 	ragReason string,
-	trigger authorityllm.TrustedTriggerContext,
 ) *domainconversation.FileObjectProcessing {
 	now := time.Now()
-	return filetrigger.ApplyToProcessingState(&domainconversation.FileObjectProcessing{
+	return &domainconversation.FileObjectProcessing{
 		FileObjectID:     fileObj.ID,
 		UserID:           fileObj.UserID,
 		DetectedMIME:     fileObj.DetectedMIME,
@@ -342,14 +323,13 @@ func (s *Service) readyWithoutExtractionState(
 		ExtractorVersion: s.version(),
 		StartedAt:        &now,
 		CompletedAt:      &now,
-	}, trigger)
+	}
 }
 
 func (s *Service) processClaimedFile(
 	ctx context.Context,
 	fileObj *domainconversation.FileObject,
 	attemptID string,
-	trigger authorityllm.TrustedTriggerContext,
 ) error {
 	cfg := s.snapshot()
 	extractTimeout := resolveProcessingExtractTimeout(cfg, fileObj.FileCategory)
@@ -358,17 +338,17 @@ func (s *Service) processClaimedFile(
 
 	startedAt := time.Now()
 	extractCtx, extractCancel := context.WithTimeout(runCtx, extractTimeout)
-	extractResult, extractErr := s.extractTextForProcessing(extractCtx, *fileObj, trigger)
+	extractResult, extractErr := s.extractTextForProcessing(extractCtx, *fileObj)
 	extractCancel()
 	if extractErr != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		code, message := resolveProcessingFailure(fileObj, extractErr)
-		return s.markClaimedFileProcessingFailed(runCtx, fileObj, attemptID, code, message, trigger)
+		return s.markClaimedFileProcessingFailed(runCtx, fileObj, attemptID, code, message)
 	}
 	if strings.TrimSpace(extractResult.Text) == "" {
-		return s.markClaimedFileProcessingFailed(runCtx, fileObj, attemptID, "extract_failed", "无法提取文本", trigger)
+		return s.markClaimedFileProcessingFailed(runCtx, fileObj, attemptID, "extract_failed", "无法提取文本")
 	}
 
 	extractPath, err := s.extractSvc.WriteExtractedText(runCtx, fileObj.UserID, fileObj.FileID, extractResult.Text)
@@ -376,7 +356,7 @@ func (s *Service) processClaimedFile(
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return s.markClaimedFileProcessingFailed(runCtx, fileObj, attemptID, "extract_failed", HumanizeFileProcessingError(fileObj.FileCategory, "extract_failed", ""), trigger)
+		return s.markClaimedFileProcessingFailed(runCtx, fileObj, attemptID, "extract_failed", HumanizeFileProcessingError(fileObj.FileCategory, "extract_failed", ""))
 	}
 	now := time.Now()
 	preview := textutil.CompactSnippet(extractResult.Text, defaultProcessingPreview)
@@ -397,7 +377,7 @@ func (s *Service) processClaimedFile(
 	if shouldEmbed {
 		nextProcessingStatus = "embedding"
 	}
-	if err = s.updateClaimedFileProcessingState(runCtx, attemptID, filetrigger.ApplyToProcessingState(&domainconversation.FileObjectProcessing{
+	if err = s.updateClaimedFileProcessingState(runCtx, attemptID, &domainconversation.FileObjectProcessing{
 		FileObjectID:       fileObj.ID,
 		UserID:             fileObj.UserID,
 		DetectedMIME:       fileObj.DetectedMIME,
@@ -418,7 +398,7 @@ func (s *Service) processClaimedFile(
 		StartedAt:          &startedAt,
 		CompletedAt:        &now,
 		ExtractedAt:        &now,
-	}, trigger)); err != nil {
+	}); err != nil {
 		return err
 	}
 
@@ -430,7 +410,7 @@ func (s *Service) processClaimedFile(
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return s.updateClaimedFileProcessingState(runCtx, attemptID, filetrigger.ApplyToProcessingState(&domainconversation.FileObjectProcessing{
+			return s.updateClaimedFileProcessingState(runCtx, attemptID, &domainconversation.FileObjectProcessing{
 				FileObjectID:       fileObj.ID,
 				UserID:             fileObj.UserID,
 				DetectedMIME:       fileObj.DetectedMIME,
@@ -453,11 +433,11 @@ func (s *Service) processClaimedFile(
 				StartedAt:          &startedAt,
 				CompletedAt:        &now,
 				ExtractedAt:        &now,
-			}, trigger))
+			})
 		}
 	}
 
-	if err = s.updateClaimedFileProcessingState(runCtx, attemptID, filetrigger.ApplyToProcessingState(&domainconversation.FileObjectProcessing{
+	if err = s.updateClaimedFileProcessingState(runCtx, attemptID, &domainconversation.FileObjectProcessing{
 		FileObjectID:       fileObj.ID,
 		UserID:             fileObj.UserID,
 		DetectedMIME:       fileObj.DetectedMIME,
@@ -486,7 +466,7 @@ func (s *Service) processClaimedFile(
 		StartedAt:        &startedAt,
 		CompletedAt:      &now,
 		ExtractedAt:      &now,
-	}, trigger)); err != nil {
+	}); err != nil {
 		return err
 	}
 	return nil
@@ -714,18 +694,7 @@ func (s *Service) handleProcessingMessage(ctx context.Context, consumerName stri
 	}
 
 	attemptID := uuid.NewString()
-	trustedCtx, _, restoreErr := filetrigger.Restore(ctx, msg.TriggerContext)
-	if restoreErr != nil {
-		if s.logger != nil {
-			s.logger.Warn("restore_file_processing_trigger_failed",
-				zap.String("file_id", msg.FileID),
-				zap.String("message_id", msg.ID),
-				zap.Error(restoreErr),
-			)
-		}
-		return
-	}
-	processingCtx, cancelProcessing := context.WithCancel(trustedCtx)
+	processingCtx, cancelProcessing := context.WithCancel(ctx)
 	leaseCtx, stopLease := context.WithCancel(ctx)
 	leaseDone := make(chan struct{})
 	ownershipLost := make(chan struct{})
@@ -737,7 +706,7 @@ func (s *Service) handleProcessingMessage(ctx context.Context, consumerName stri
 		consumerName,
 		msg,
 	)
-	claimed, err := s.processFile(processingCtx, msg.UserID, msg.FileID, msg.Reclaimed, attemptID, msg.TriggerContext)
+	claimed, err := s.processFile(processingCtx, msg.UserID, msg.FileID, msg.Reclaimed, attemptID)
 	stopLease()
 	<-leaseDone
 	cancelProcessing()
@@ -857,21 +826,9 @@ func (s *Service) handleEmbeddingMessage(ctx context.Context, consumerName strin
 		UserID:             msg.UserID,
 		EmbeddingSignature: msg.EmbeddingSignature,
 		EmbeddingHost:      msg.EmbeddingHost,
-		TriggerContext:     msg.TriggerContext,
 	}
 
-	trustedCtx, _, restoreErr := filetrigger.Restore(ctx, msg.TriggerContext)
-	if restoreErr != nil {
-		if s.logger != nil {
-			s.logger.Warn("restore_file_embedding_trigger_failed",
-				zap.String("file_id", msg.FileID),
-				zap.String("message_id", msg.ID),
-				zap.Error(restoreErr),
-			)
-		}
-		return
-	}
-	processingCtx, cancelProcessing := context.WithCancel(trustedCtx)
+	processingCtx, cancelProcessing := context.WithCancel(ctx)
 	leaseCtx, stopLease := context.WithCancel(ctx)
 	leaseDone := make(chan struct{})
 	ownershipLost := make(chan struct{})
@@ -1068,25 +1025,18 @@ func (s *Service) forceFinalizeFailed(parent context.Context, userID uint, fileI
 }
 
 // enqueueFileProcessing 将文件处理任务放入队列；无队列缓存时退化为进程内受限并发的异步处理。
-func (s *Service) enqueueFileProcessing(
-	ctx context.Context,
-	userID uint,
-	fileID string,
-	retry int,
-	lastError string,
-	trigger ...authorityllm.TrustedTriggerContext,
-) error {
+func (s *Service) enqueueFileProcessing(ctx context.Context, userID uint, fileID string, retry int, lastError string) error {
 	if s.cache == nil {
-		return s.processInFallbackMode(ctx, userID, fileID, trigger...)
+		return s.processInFallbackMode(ctx, userID, fileID)
 	}
-	return s.cache.EnqueueFileProcessing(ctx, userID, fileID, retry, processingQueueFailureMessage, trigger...)
+	return s.cache.EnqueueFileProcessing(ctx, userID, fileID, retry, processingQueueFailureMessage)
 }
 
 // processInFallbackMode 在无队列缓存的降级模式下异步处理文件：
 // 并发由 fallbackSlots 信号量限制，超出容量返回 ErrFileProcessingQueueFull，
 // 由 InitializeUploadedFile 将文件标为 failed，避免永远停在 queued。
 // 单个任务由硬超时兜底退出；超时后按同一 attemptID 落失败态。
-func (s *Service) processInFallbackMode(parent context.Context, userID uint, fileID string, trigger ...authorityllm.TrustedTriggerContext) error {
+func (s *Service) processInFallbackMode(parent context.Context, userID uint, fileID string) error {
 	select {
 	case s.fallbackSlots <- struct{}{}:
 	default:
@@ -1097,7 +1047,7 @@ func (s *Service) processInFallbackMode(parent context.Context, userID uint, fil
 		attemptID := uuid.NewString()
 		taskCtx, cancel := background.WithTimeout(parent, fallbackProcessingTimeout)
 		defer cancel()
-		claimed, err := s.processFile(taskCtx, userID, fileID, false, attemptID, trigger...)
+		claimed, err := s.processFile(taskCtx, userID, fileID, false, attemptID)
 		if err == nil {
 			return
 		}
@@ -1137,7 +1087,6 @@ func (s *Service) markClaimedFileProcessingFailed(
 	attemptID string,
 	code string,
 	message string,
-	trigger ...authorityllm.TrustedTriggerContext,
 ) error {
 	if fileObj == nil {
 		return nil
@@ -1151,7 +1100,7 @@ func (s *Service) markClaimedFileProcessingFailed(
 	return s.updateClaimedFileProcessingState(
 		writeCtx,
 		attemptID,
-		s.failedFileProcessingState(fileObj, code, message, trigger...),
+		s.failedFileProcessingState(fileObj, code, message),
 	)
 }
 
@@ -1159,14 +1108,9 @@ func (s *Service) failedFileProcessingState(
 	fileObj *domainconversation.FileObject,
 	code string,
 	message string,
-	trigger ...authorityllm.TrustedTriggerContext,
 ) *domainconversation.FileObjectProcessing {
 	now := time.Now()
-	effectiveTrigger := filetrigger.ContextFromFileObject(*fileObj)
-	if len(trigger) > 0 {
-		effectiveTrigger = trigger[0]
-	}
-	return filetrigger.ApplyToProcessingState(&domainconversation.FileObjectProcessing{
+	return &domainconversation.FileObjectProcessing{
 		FileObjectID:     fileObj.ID,
 		UserID:           fileObj.UserID,
 		DetectedMIME:     fileObj.DetectedMIME,
@@ -1180,7 +1124,7 @@ func (s *Service) failedFileProcessingState(
 		ErrorMessage:     textutil.TruncateTrimmed(HumanizeFileProcessingError(fileObj.FileCategory, code, message), 255),
 		ExtractorVersion: s.version(),
 		CompletedAt:      &now,
-	}, effectiveTrigger)
+	}
 }
 
 func (s *Service) updateClaimedFileProcessingState(
@@ -1198,22 +1142,7 @@ func (s *Service) updateClaimedFileProcessingState(
 	return nil
 }
 
-func (s *Service) extractTextForProcessing(
-	ctx context.Context,
-	fileObj domainconversation.FileObject,
-	trigger ...authorityllm.TrustedTriggerContext,
-) (extraction.Result, error) {
-	effectiveTrigger := filetrigger.ContextFromFileObject(fileObj)
-	if len(trigger) > 0 {
-		effectiveTrigger = trigger[0]
-	}
-	if repository.HasTrustedTriggerMetadata(effectiveTrigger) {
-		var err error
-		ctx, _, err = filetrigger.Restore(ctx, effectiveTrigger)
-		if err != nil {
-			return extraction.Result{}, err
-		}
-	}
+func (s *Service) extractTextForProcessing(ctx context.Context, fileObj domainconversation.FileObject) (extraction.Result, error) {
 	if s == nil || s.extractSvc == nil {
 		return extraction.Result{}, errExtractionServiceNotConfigured
 	}
@@ -1227,7 +1156,6 @@ func (s *Service) extractTextForProcessing(
 	go func() {
 		result, err := s.extractSvc.ExtractStoredFile(ctx, extraction.ExtractInput{
 			File:                  fileObj,
-			TriggerContext:        filetrigger.Pointer(effectiveTrigger),
 			PDFMaxPages:           0,
 			OCREngine:             s.snapshot().ExtractOCREngine,
 			ImageOCREnabled:       s.snapshot().ExtractImageOCREnabled,

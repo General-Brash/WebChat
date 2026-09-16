@@ -7,7 +7,6 @@ import (
 
 	appconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/conversation"
 	appembedding "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/embedding"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/filetrigger"
 	appknowledgebase "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/knowledgebase"
 	appupload "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/upload"
 	domainconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
@@ -336,22 +335,9 @@ func (h *Handler) UploadAdminFile(c *gin.Context) {
 		return
 	}
 	defer fileReader.Close() //nolint:errcheck
-	actorUserID := middleware.MustUserID(c)
-	operationCtx, trigger, err := filetrigger.Begin(
-		c.Request.Context(),
-		actorUserID,
-		0,
-		filetrigger.PurposeFileExtract,
-	)
-	if err != nil {
-		response.ErrorFrom(c, http.StatusUnauthorized, err)
-		return
-	}
-	c.Request = c.Request.WithContext(operationCtx)
 
-	result, err := h.service.UploadBuiltinFile(c.Request.Context(), actorUserID, appupload.UploadFileInput{
-		TriggerContext: &trigger,
-		FileName:       fileHeader.Filename, MimeType: fileHeader.Header.Get("Content-Type"),
+	result, err := h.service.UploadBuiltinFile(c.Request.Context(), middleware.MustUserID(c), appupload.UploadFileInput{
+		FileName: fileHeader.Filename, MimeType: fileHeader.Header.Get("Content-Type"),
 		DeclaredSize: fileHeader.Size, Reader: fileReader,
 	})
 	if err != nil {
@@ -387,19 +373,7 @@ func (h *Handler) SubmitAdminFileEmbeddings(c *gin.Context) {
 		response.InvalidRequestBody(c, err)
 		return
 	}
-	actorUserID := middleware.MustUserID(c)
-	operationCtx, _, err := filetrigger.Begin(
-		c.Request.Context(),
-		actorUserID,
-		0,
-		filetrigger.PurposeFileEmbedding,
-	)
-	if err != nil {
-		response.ErrorFrom(c, http.StatusUnauthorized, err)
-		return
-	}
-	c.Request = c.Request.WithContext(operationCtx)
-	result, err := h.service.SubmitPlatformFileEmbeddings(c.Request.Context(), actorUserID, req.FileIDs)
+	result, err := h.service.SubmitPlatformFileEmbeddings(c.Request.Context(), middleware.MustUserID(c), req.FileIDs)
 	if err != nil {
 		switch {
 		case errors.Is(err, appembedding.ErrTooManyTargetedFiles):

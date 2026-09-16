@@ -13,11 +13,9 @@ import (
 	domainconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	portembedding "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/embedding"
-	authorityllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/embeddingutil"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/tokenestimate"
-	"github.com/google/uuid"
 )
 
 // Service 封装 RAG 检索能力。
@@ -35,13 +33,10 @@ type EmbeddingClient interface {
 
 // RetrieveInput 定义 RAG 检索输入。
 type RetrieveInput struct {
-	UserID         uint
-	Query          string
-	FileObjs       []domainconversation.FileObject
-	Ephemeral      bool
-	// TriggerContext is server-owned attribution metadata for any embedding
-	// provider call made during retrieval.
-	TriggerContext *authorityllm.TrustedTriggerContext `json:"-"`
+	UserID    uint
+	Query     string
+	FileObjs  []domainconversation.FileObject
+	Ephemeral bool
 }
 
 type hybridRetrieveInput struct {
@@ -101,11 +96,6 @@ func (s *Service) Retrieve(ctx context.Context, input RetrieveInput) ([]domainco
 
 // RetrieveWithStatus 对查询文本做向量检索，并返回可观测的稳定状态。
 func (s *Service) RetrieveWithStatus(ctx context.Context, input RetrieveInput) (RetrieveResult, error) {
-	var bindErr error
-	ctx, bindErr = bindRAGTriggerContext(ctx, input.TriggerContext, input.UserID)
-	if bindErr != nil {
-		return ragErrorResult(ctx, bindErr), bindErr
-	}
 	cfg := s.snapshot()
 	if !cfg.RAGEnabled || !cfg.EmbeddingEnabled || cfg.RAGModel == "" {
 		return RetrieveResult{Status: RetrieveStatusUnavailable, Reason: "rag_or_embedding_disabled"}, nil
@@ -238,12 +228,7 @@ func (s *Service) snapshot() config.Config {
 	if s == nil || s.cfg == nil {
 		return config.Config{}
 	}
-	snapshot := s.cfg.Snapshot()
-	if snapshot.UsesSub2Authority() {
-		snapshot.EmbeddingHost = snapshot.Sub2BaseURL
-		snapshot.EmbeddingKey = ""
-	}
-	return snapshot
+	return s.cfg.Snapshot()
 }
 
 func normalizeRAGQuery(query string) string {
@@ -441,10 +426,6 @@ func (s *Service) embedTexts(ctx context.Context, texts []string, cfg config.Con
 	if len(texts) == 0 {
 		return nil, nil
 	}
-	providerCtx, err := prepareRAGProviderContext(ctx, texts, cfg)
-	if err != nil {
-		return nil, err
-	}
 	model := strings.TrimSpace(cfg.RAGModel)
 	host := strings.TrimSpace(cfg.EmbeddingHost)
 	if !cfg.EmbeddingEnabled || model == "" || host == "" {
@@ -469,7 +450,7 @@ func (s *Service) embedTexts(ctx context.Context, texts []string, cfg config.Con
 		if end > len(texts) {
 			end = len(texts)
 		}
-		batchEmbeddings, batchErr := s.embedClient.CallAPI(providerCtx, portembedding.Request{
+		batchEmbeddings, batchErr := s.embedClient.CallAPI(ctx, portembedding.Request{
 			APIBase:        apiBase,
 			APIKey:         apiKey,
 			Model:          model,
@@ -485,91 +466,7 @@ func (s *Service) embedTexts(ctx context.Context, texts []string, cfg config.Con
 	return allEmbeddings, nil
 }
 
-func bindRAGTriggerContext(ctx context.Context, provided *authorityllm.TrustedTriggerContext, resourceOwnerUserID uint) (context.Context, error) {
-	if ctx == nil {
-		return ctx, authorityllm.ErrTrustedTriggerRequired
-	}
-	if provided == nil {
-		return ctx, nil
-	}
-	trigger := *provided
-	subject := authorityllm.ExecutionSubjectFromContext(ctx)
-	if trigger.TriggererUserID == 0 {
-		return ctx, authorityllm.ErrTrustedTriggerRequired
-	}
-	if subject.HasTriggerer() {
-		if subject.TriggererUserID != trigger.TriggererUserID {
-			return ctx, authorityllm.ErrTrustedTriggerMismatch
-		}
-		if subject.RunID != "" && trigger.RunID != "" && subject.RunID != trigger.RunID {
-			return ctx, authorityllm.ErrTrustedTriggerMismatch
-		}
-		if trigger.ResourceOwnerUserID != 0 && resourceOwnerUserID != 0 && trigger.ResourceOwnerUserID != resourceOwnerUserID {
-			return ctx, authorityllm.ErrTrustedTriggerMismatch
-		}
-		return ctx, nil
-	}
-	if resourceOwnerUserID != 0 && trigger.ResourceOwnerUserID != 0 && trigger.ResourceOwnerUserID != resourceOwnerUserID {
-		return ctx, authorityllm.ErrTrustedTriggerMismatch
-	}
-	bound, err := authorityllm.WithTrustedTriggerContext(ctx, trigger)
-	if err != nil {
-		return ctx, err
-	}
-	return bound, nil
-}
-
-func prepareRAGProviderContext(ctx context.Context, texts []string, cfg config.Config) (context.Context, error) {
-	if ctx == nil {
-		return ctx, authorityllm.ErrTrustedTriggerRequired
-	}
-	subject := authorityllm.ExecutionSubjectFromContext(ctx)
-	if !subject.HasTriggerer() {
-		return ctx, authorityllm.ErrTrustedTriggerRequired
-	}
-	seed := strings.Join([]string{
-		"deeix-chat:rag-query",
-		subject.RunID,
-		subject.ExecutionID,
-		configuredRAGModelSignature(cfg),
-		normalizeRAGQuery(strings.Join(texts, "\x00")),
-	}, "\x00")
-	if strings.TrimSpace(subject.ExecutionID) != "" {
-		childID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(seed)).String()
-		childCtx, err := authorityllm.WithTrustedExecutionChild(ctx, childID)
-		if err != nil {
-			return ctx, err
-		}
-		return childCtx, nil
-	}
-	trigger := subject.TrustedTriggerContext
-	trigger.TriggererUserID = subject.TriggererUserID
-	if strings.TrimSpace(trigger.Purpose) == "" {
-		trigger.Purpose = "rag.query"
-	}
-	if strings.TrimSpace(trigger.RunID) == "" {
-		trigger.RunID = "rag_" + uuid.NewString()
-	}
-	trigger.ExecutionID = uuid.NewString()
-	if trigger.CreatedAt.IsZero() {
-		trigger.CreatedAt = time.Now().UTC()
-	}
-	providerCtx, err := authorityllm.WithTrustedTriggerContext(ctx, trigger)
-	if err != nil {
-		return ctx, err
-	}
-	return providerCtx, nil
-}
-
-func configuredRAGModelSignature(cfg config.Config) string {
-	return strings.Join([]string{strings.TrimSpace(cfg.RAGModel), fmt.Sprintf("%d", cfg.EmbeddingOutputDimensions)}, "@")
-}
-
 func resolveEmbeddingUpstream(cfg config.Config) (string, string, error) {
-	if cfg.UsesSub2Authority() {
-		cfg.EmbeddingHost = cfg.Sub2BaseURL
-		cfg.EmbeddingKey = ""
-	}
 	if strings.TrimSpace(cfg.RAGModel) == "" {
 		return "", "", fmt.Errorf("file.rag_model is required")
 	}

@@ -44,8 +44,6 @@ func translateUniqueConstraint(err error) error {
 		return repository.ErrDuplicateUsername
 	case strings.Contains(msg, "uk_identity_user_links_provider_subject"):
 		return repository.ErrDuplicateUserIdentity
-	case strings.Contains(msg, "uk_sub2_identity"):
-		return repository.ErrDuplicate
 	default:
 		return repository.ErrDuplicate
 	}
@@ -1383,22 +1381,7 @@ func (r *Repo) HasActiveSuperAdminIdentity(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, translateError(err)
 	}
-	if count > 0 {
-		return true, nil
-	}
-
-	// Sub2 bindings are a separate trusted login path and therefore must be
-	// included in the last-superadmin protection check. The local projection
-	// alone is insufficient when ordinary provider identities are disabled.
-	var sub2Count int64
-	if err = r.db.WithContext(ctx).
-		Model(&model.Sub2IdentityBinding{}).
-		Joins("JOIN identity_users ON identity_users.id = integration_sub2_identity_bindings.user_id").
-		Where("integration_sub2_identity_bindings.status = ? AND integration_sub2_identity_bindings.role = ? AND integration_sub2_identity_bindings.subject_assertion_expires_at > ? AND identity_users.role = ? AND identity_users.status = ?", "active", "super_admin", time.Now(), model.RoleSuperAdmin, model.UserStatusActive).
-		Count(&sub2Count).Error; err != nil {
-		return false, translateError(err)
-	}
-	return sub2Count > 0, nil
+	return count > 0, nil
 }
 
 func (r *Repo) GetIdentityProviderByPublicID(ctx context.Context, publicID string) (*domainuser.IdentityProvider, error) {

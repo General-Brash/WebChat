@@ -250,32 +250,6 @@ type yamlConfig struct {
 		SSRFAllowedCIDRs       string `yaml:"ssrf_allowed_cidrs"`
 		TurnstileSiteverifyURL string `yaml:"turnstile_siteverify_url"`
 	} `yaml:"security"`
-	BillingAuthority string `yaml:"billing_authority"`
-	Sub2             struct {
-		AuthorityMode                string `yaml:"authority_mode"`
-		Application                  string `yaml:"application"`
-		BaseURL                      string `yaml:"base_url"`
-		ServiceID                    string `yaml:"service_id"`
-		SigningKeyID                 string `yaml:"signing_key_id"`
-		SigningPrivateKey            string `yaml:"signing_private_key"`
-		SigningPrivateKeyFile        string `yaml:"signing_private_key_file"`
-		ClientCertFile               string `yaml:"client_cert_file"`
-		ClientKeyFile                string `yaml:"client_key_file"`
-		CACertFile                   string `yaml:"ca_cert_file"`
-		TLSServerName                string `yaml:"tls_server_name"`
-		RequestTimeoutSeconds        int    `yaml:"request_timeout_seconds"`
-		MaxResponseBytes             int64  `yaml:"max_response_bytes"`
-		OIDCIssuer                   string `yaml:"oidc_issuer"`
-		OIDCClientID                 string `yaml:"oidc_client_id"`
-		OIDCClientSecret             string `yaml:"oidc_client_secret"`
-		OIDCRedirectURI              string `yaml:"oidc_redirect_uri"`
-		OIDCAuthURL                  string `yaml:"oidc_auth_url"`
-		OIDCTokenURL                 string `yaml:"oidc_token_url"`
-		OIDCJWKSURL                  string `yaml:"oidc_jwks_url"`
-		OIDCScopes                   string `yaml:"oidc_scopes"`
-		OIDCClockSkewSeconds         int    `yaml:"oidc_clock_skew_seconds"`
-		IdentityCheckIntervalSeconds int    `yaml:"identity_check_interval_seconds"`
-	} `yaml:"sub2"`
 	Database struct {
 		Driver   string `yaml:"driver"`
 		Postgres struct {
@@ -427,32 +401,6 @@ type Config struct {
 	OTelExporterOTLPInsecure     bool
 	OTelExporterOTLPProtocol     string
 	OTelSamplingRate             float64
-
-	// ── Sub2 integration authority (static YAML/ENV; never DB-overridden) ──
-	BillingAuthority                 string
-	Sub2AuthorityMode                string
-	Sub2Application                  string
-	Sub2BaseURL                      string
-	Sub2ServiceID                    string
-	Sub2SigningKeyID                 string
-	Sub2SigningPrivateKey            string
-	Sub2SigningPrivateKeyFile        string
-	Sub2ClientCertFile               string
-	Sub2ClientKeyFile                string
-	Sub2CACertFile                   string
-	Sub2TLSServerName                string
-	Sub2RequestTimeoutSeconds        int
-	Sub2MaxResponseBytes             int64
-	Sub2OIDCIssuer                   string
-	Sub2OIDCClientID                 string
-	Sub2OIDCClientSecret             string
-	Sub2OIDCRedirectURI              string
-	Sub2OIDCAuthURL                  string
-	Sub2OIDCTokenURL                 string
-	Sub2OIDCJWKSURL                  string
-	Sub2OIDCScopes                   string
-	Sub2OIDCClockSkewSeconds         int
-	Sub2IdentityCheckIntervalSeconds int
 
 	// ── 动态配置（由 DB 种子初始化默认值，settings.RuntimeSettings.ApplyTo 覆盖） ──
 	// 认证配置
@@ -696,31 +644,6 @@ func Load() Config {
 		OTelExporterOTLPProtocol:     normalizeOTelExporterOTLPProtocol(envOr("OTEL_EXPORTER_OTLP_PROTOCOL", yc.Observability.Tracing.Protocol, "grpc")),
 		OTelSamplingRate:             envOrFloat("OTEL_TRACES_SAMPLER_ARG", envOrFloat("OTEL_SAMPLING_RATE", yc.Observability.Tracing.SamplingRate, 1), 1),
 
-		BillingAuthority:                 normalizeBillingAuthority(envOr("BILLING_AUTHORITY", yc.BillingAuthority, AuthorityModeLocal)),
-		Sub2AuthorityMode:                normalizeSub2AuthorityMode(envOr("SUB2_AUTHORITY_MODE", yc.Sub2.AuthorityMode, AuthorityModeLocal)),
-		Sub2Application:                  envOr("SUB2_APPLICATION", yc.Sub2.Application, "deeix-chat"),
-		Sub2BaseURL:                      envOr("SUB2_BASE_URL", yc.Sub2.BaseURL, ""),
-		Sub2ServiceID:                    envOr("SUB2_SERVICE_ID", yc.Sub2.ServiceID, ""),
-		Sub2SigningKeyID:                 envOr("SUB2_SIGNING_KEY_ID", yc.Sub2.SigningKeyID, ""),
-		Sub2SigningPrivateKey:            envOr("SUB2_SIGNING_PRIVATE_KEY", yc.Sub2.SigningPrivateKey, ""),
-		Sub2SigningPrivateKeyFile:        envOrPath("SUB2_SIGNING_PRIVATE_KEY_FILE", yc.Sub2.SigningPrivateKeyFile, "", yc.sourceDir),
-		Sub2ClientCertFile:               envOrPath("SUB2_CLIENT_CERT_FILE", yc.Sub2.ClientCertFile, "", yc.sourceDir),
-		Sub2ClientKeyFile:                envOrPath("SUB2_CLIENT_KEY_FILE", yc.Sub2.ClientKeyFile, "", yc.sourceDir),
-		Sub2CACertFile:                   envOrPath("SUB2_CA_CERT_FILE", yc.Sub2.CACertFile, "", yc.sourceDir),
-		Sub2TLSServerName:                envOr("SUB2_TLS_SERVER_NAME", yc.Sub2.TLSServerName, ""),
-		Sub2RequestTimeoutSeconds:        envOrInt("SUB2_REQUEST_TIMEOUT_SECONDS", yc.Sub2.RequestTimeoutSeconds, 10),
-		Sub2MaxResponseBytes:             envOrInt64("SUB2_MAX_RESPONSE_BYTES", yc.Sub2.MaxResponseBytes, 4*1024*1024),
-		Sub2OIDCIssuer:                   envOr("SUB2_OIDC_ISSUER", yc.Sub2.OIDCIssuer, ""),
-		Sub2OIDCClientID:                 envOr("SUB2_OIDC_CLIENT_ID", yc.Sub2.OIDCClientID, ""),
-		Sub2OIDCClientSecret:             envOr("SUB2_OIDC_CLIENT_SECRET", yc.Sub2.OIDCClientSecret, ""),
-		Sub2OIDCRedirectURI:              envOr("SUB2_OIDC_REDIRECT_URI", yc.Sub2.OIDCRedirectURI, ""),
-		Sub2OIDCAuthURL:                  envOr("SUB2_OIDC_AUTH_URL", yc.Sub2.OIDCAuthURL, ""),
-		Sub2OIDCTokenURL:                 envOr("SUB2_OIDC_TOKEN_URL", yc.Sub2.OIDCTokenURL, ""),
-		Sub2OIDCJWKSURL:                  envOr("SUB2_OIDC_JWKS_URL", yc.Sub2.OIDCJWKSURL, ""),
-		Sub2OIDCScopes:                   envOr("SUB2_OIDC_SCOPES", yc.Sub2.OIDCScopes, "openid profile email"),
-		Sub2OIDCClockSkewSeconds:         envOrInt("SUB2_OIDC_CLOCK_SKEW_SECONDS", yc.Sub2.OIDCClockSkewSeconds, 60),
-		Sub2IdentityCheckIntervalSeconds: envOrInt("SUB2_IDENTITY_CHECK_INTERVAL_SECONDS", yc.Sub2.IdentityCheckIntervalSeconds, 60),
-
 		// 动态配置默认值（会被 DB 覆盖）
 		TokenTTLHours:                     24,
 		RefreshTokenTTLHours:              720,
@@ -868,9 +791,6 @@ func (c Config) Validate() error {
 	if err := c.validateStorage(); err != nil {
 		return err
 	}
-	if err := c.validateAuthority(); err != nil {
-		return err
-	}
 	env := normalizeEnv(c.Env)
 	if env != "dev" && env != "prod" {
 		if env == "" {
@@ -911,112 +831,6 @@ func (c Config) Validate() error {
 		return err
 	}
 
-	return nil
-}
-
-const (
-	AuthorityModeLocal = "local"
-	AuthorityModeSub2  = "sub2"
-)
-
-// UsesSub2Authority reports whether the explicit Sub2 integration mode is enabled.
-func (c Config) UsesSub2Authority() bool {
-	return normalizeSub2AuthorityMode(c.Sub2AuthorityMode) == AuthorityModeSub2
-}
-
-// UsesSub2BillingAuthority reports whether local wallet/settlement must be disabled.
-func (c Config) UsesSub2BillingAuthority() bool {
-	return normalizeBillingAuthority(c.BillingAuthority) == AuthorityModeSub2
-}
-
-func normalizeSub2AuthorityMode(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", AuthorityModeLocal, "off", "disabled":
-		return AuthorityModeLocal
-	case AuthorityModeSub2, "external":
-		return AuthorityModeSub2
-	default:
-		return strings.ToLower(strings.TrimSpace(value))
-	}
-}
-
-func normalizeBillingAuthority(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", AuthorityModeLocal, "chat":
-		return AuthorityModeLocal
-	case AuthorityModeSub2, "external":
-		return AuthorityModeSub2
-	default:
-		return strings.ToLower(strings.TrimSpace(value))
-	}
-}
-
-func (c Config) validateAuthority() error {
-	mode := normalizeSub2AuthorityMode(c.Sub2AuthorityMode)
-	billing := normalizeBillingAuthority(c.BillingAuthority)
-	if mode != AuthorityModeLocal && mode != AuthorityModeSub2 {
-		return fmt.Errorf("invalid integration config: SUB2_AUTHORITY_MODE must be local or sub2 (got %q)", c.Sub2AuthorityMode)
-	}
-	if billing != AuthorityModeLocal && billing != AuthorityModeSub2 {
-		return fmt.Errorf("invalid integration config: BILLING_AUTHORITY must be local or sub2 (got %q)", c.BillingAuthority)
-	}
-	if mode == AuthorityModeLocal {
-		if billing == AuthorityModeSub2 {
-			return errors.New("invalid integration config: BILLING_AUTHORITY=sub2 requires SUB2_AUTHORITY_MODE=sub2")
-		}
-		return nil
-	}
-	if billing != AuthorityModeSub2 {
-		return errors.New("invalid integration config: SUB2_AUTHORITY_MODE=sub2 requires BILLING_AUTHORITY=sub2")
-	}
-	if strings.TrimSpace(c.Sub2Application) == "" {
-		return errors.New("invalid integration config: SUB2_APPLICATION must be set when SUB2_AUTHORITY_MODE=sub2")
-	}
-	for _, endpoint := range []struct {
-		value string
-		label string
-	}{
-		{c.Sub2BaseURL, "SUB2_BASE_URL"},
-		{c.Sub2OIDCIssuer, "SUB2_OIDC_ISSUER"},
-		{c.Sub2OIDCRedirectURI, "SUB2_OIDC_REDIRECT_URI"},
-		{c.Sub2OIDCAuthURL, "SUB2_OIDC_AUTH_URL"},
-		{c.Sub2OIDCTokenURL, "SUB2_OIDC_TOKEN_URL"},
-		{c.Sub2OIDCJWKSURL, "SUB2_OIDC_JWKS_URL"},
-	} {
-		if strings.TrimSpace(endpoint.value) == "" {
-			return fmt.Errorf("invalid integration config: %s must be set when SUB2_AUTHORITY_MODE=sub2", endpoint.label)
-		}
-		if err := validateHTTPIntegrationURL(endpoint.value, endpoint.label); err != nil {
-			return err
-		}
-		if c.IsProduction() {
-			parsed, err := url.Parse(strings.TrimSpace(endpoint.value))
-			if err != nil || parsed.Scheme != "https" {
-				return fmt.Errorf("invalid production integration config: %s must use https", endpoint.label)
-			}
-		}
-	}
-	if strings.TrimSpace(c.Sub2ServiceID) == "" || strings.TrimSpace(c.Sub2SigningKeyID) == "" {
-		return errors.New("invalid integration config: SUB2_SERVICE_ID and SUB2_SIGNING_KEY_ID must be set")
-	}
-	if strings.TrimSpace(c.Sub2SigningPrivateKey) == "" && strings.TrimSpace(c.Sub2SigningPrivateKeyFile) == "" {
-		return errors.New("invalid integration config: SUB2_SIGNING_PRIVATE_KEY or SUB2_SIGNING_PRIVATE_KEY_FILE must be set")
-	}
-	if (strings.TrimSpace(c.Sub2ClientCertFile) == "") != (strings.TrimSpace(c.Sub2ClientKeyFile) == "") {
-		return errors.New("invalid integration config: SUB2_CLIENT_CERT_FILE and SUB2_CLIENT_KEY_FILE must be configured together")
-	}
-	if strings.TrimSpace(c.Sub2OIDCClientID) == "" {
-		return errors.New("invalid integration config: SUB2_OIDC_CLIENT_ID must be set")
-	}
-	if strings.TrimSpace(c.Sub2OIDCClientSecret) == "" && strings.TrimSpace(c.Sub2ClientCertFile) == "" {
-		return errors.New("invalid integration config: SUB2_OIDC_CLIENT_SECRET or mTLS client certificate must be set")
-	}
-	if c.Sub2RequestTimeoutSeconds <= 0 || c.Sub2MaxResponseBytes <= 0 {
-		return errors.New("invalid integration config: Sub2 request timeout and max response bytes must be positive")
-	}
-	if c.Sub2OIDCClockSkewSeconds <= 0 || c.Sub2IdentityCheckIntervalSeconds <= 0 {
-		return errors.New("invalid integration config: Sub2 OIDC clock skew and identity check interval must be positive")
-	}
 	return nil
 }
 

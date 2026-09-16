@@ -390,9 +390,7 @@
         "amount": "Amount",
         "total": "Total"
       }
-    },
-    "sub2Pending": "Sub2 settlement pending",
-    "sub2Receipt": "Sub2 ledger is authoritative. Pending does not mean free."
+    }
   },
   "composer": {
     "uploadFile": "Upload file",

@@ -57,18 +57,15 @@ type (
 
 // Client 封装 PDF OCR 回退能力。
 type Client struct {
-	requestExecutor func(string, *http.Request) (*http.Response, error)
-	baseURL         string
-	authToken       string
-	model           string
-	prompt          string
-	timeoutSeconds  int
-	httpClient      *http.Client
-	llmClient       interface {
-		Generate(context.Context, portllm.RouteConfig, portllm.GenerateInput) (*portllm.GenerateOutput, error)
-	}
-	pdfRenderer *pdfrender.Renderer
-	mistral     bool
+	baseURL        string
+	authToken      string
+	model          string
+	prompt         string
+	timeoutSeconds int
+	httpClient     *http.Client
+	llmClient      *llminfra.Client
+	pdfRenderer    *pdfrender.Renderer
+	mistral        bool
 }
 
 // NewRapidOCR 创建 RapidOCR client。
@@ -359,7 +356,6 @@ func (c *Client) extractImageTextWithLLM(ctx context.Context, imageData []byte, 
 
 	output, err := c.llmClient.Generate(ctx, portllm.RouteConfig{
 		Protocol:         portllm.AdapterOpenAIChatCompletions,
-		RetailModel:      c.model,
 		BaseURL:          c.baseURL,
 		APIKey:           c.authToken,
 		ReadTimeoutMS:    max(c.timeoutSeconds, 60) * 1000,
@@ -878,21 +874,4 @@ func firstNonEmptyPageTexts(groups ...[]PageText) []PageText {
 		}
 	}
 	return nil
-}
-
-func (c *Client) SetLLMGateway(gateway interface {
-	Generate(context.Context, portllm.RouteConfig, portllm.GenerateInput) (*portllm.GenerateOutput, error)
-}) {
-	if c.llmClient != nil {
-		c.llmClient = gateway
-	}
-}
-func (c *Client) SetRequestExecutor(executor func(string, *http.Request) (*http.Response, error)) {
-	c.requestExecutor = executor
-}
-func (c *Client) doOCRRequest(req *http.Request) (*http.Response, error) {
-	if c.mistral && c.requestExecutor != nil {
-		return c.requestExecutor(c.model, req)
-	}
-	return c.httpClient.Do(req)
 }

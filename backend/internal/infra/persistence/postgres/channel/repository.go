@@ -87,12 +87,6 @@ func (r *Repo) UpdateUpstream(ctx context.Context, upstreamID uint, input reposi
 
 func upstreamUpdates(input repository.UpdateChannelUpstreamInput) map[string]any {
 	updates := make(map[string]any)
-	if input.Kind != nil {
-		updates["kind"] = *input.Kind
-	}
-	if input.Sub2GroupIDsJSON != nil {
-		updates["sub2_group_ids_json"] = *input.Sub2GroupIDsJSON
-	}
 	if input.Name != nil {
 		updates["name"] = *input.Name
 	}
@@ -1817,7 +1811,6 @@ type routeScanRow struct {
 	RouteHeadersJSON                string
 	BindingCode                     string
 	UpstreamModelName               string
-	UpstreamModelRawJSON            string
 	Weight                          int
 	RoutePriority                   int
 	UpstreamCbFailureThreshold      int
@@ -1845,7 +1838,7 @@ func (r *Repo) ListActiveRoutesByModel(ctx context.Context, platformModelName st
 				"r.protocol, u.base_url, u.api_keys_enc, "+
 				"u.connect_timeout_ms, u.read_timeout_ms, u.stream_idle_timeout_ms, "+
 				"u.headers_json, r.headers_json AS route_headers_json, "+
-				"um.binding_code, um.upstream_model_name, um.raw_json AS upstream_model_raw_json, r.weight, r.priority AS route_priority, "+
+				"um.binding_code, um.upstream_model_name, r.weight, r.priority AS route_priority, "+
 				"u.cb_failure_threshold AS upstream_cb_failure_threshold, "+
 				"u.cb_model_threshold AS upstream_cb_model_threshold, "+
 				"u.cb_threshold_logic AS upstream_cb_threshold_logic, "+
@@ -1892,7 +1885,6 @@ func (r *Repo) ListActiveRoutesByModel(ctx context.Context, platformModelName st
 			RouteHeadersJSON:                s.RouteHeadersJSON,
 			BindingCode:                     s.BindingCode,
 			UpstreamModelName:               s.UpstreamModelName,
-			UpstreamModelRawJSON:            s.UpstreamModelRawJSON,
 			Weight:                          s.Weight,
 			RoutePriority:                   s.RoutePriority,
 			UpstreamCbFailureThreshold:      s.UpstreamCbFailureThreshold,
@@ -2056,8 +2048,8 @@ func (r *Repo) DeleteModelCascade(ctx context.Context, modelID uint) error {
 
 func toUpstreamDomain(item model.LLMUpstream) domainchannel.Upstream {
 	return domainchannel.Upstream{
-		ID:   item.ID,
-		Name: item.Name, Kind: item.Kind, Sub2GroupIDsJSON: item.Sub2GroupIDsJSON,
+		ID:                   item.ID,
+		Name:                 item.Name,
 		BaseURL:              item.BaseURL,
 		Compatible:           item.Compatible,
 		ProtocolDefaultsJSON: item.ProtocolDefaultsJSON,
@@ -2082,7 +2074,7 @@ func toUpstreamModel(item *domainchannel.Upstream) model.LLMUpstream {
 		return model.LLMUpstream{}
 	}
 	return model.LLMUpstream{
-		Name: item.Name, Kind: item.Kind, Sub2GroupIDsJSON: item.Sub2GroupIDsJSON,
+		Name:                 item.Name,
 		BaseURL:              item.BaseURL,
 		Compatible:           item.Compatible,
 		ProtocolDefaultsJSON: item.ProtocolDefaultsJSON,

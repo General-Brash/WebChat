@@ -254,9 +254,6 @@ func applyChatStreamEvent(
 	onEvent func(portllm.GenerateStreamEvent) error,
 	allowTextEncodedToolCalls bool,
 ) error {
-	if returnedModel := strings.TrimSpace(getString(parsed["model"])); returnedModel != "" {
-		result.ReturnedModel = returnedModel
-	}
 	if responseID := strings.TrimSpace(getString(parsed["id"])); responseID != "" {
 		result.ResponseID = responseID
 	}

@@ -78,12 +78,6 @@ type logCleanupService interface {
 type authSecurityService interface {
 	GetCurrentTwoFactorStatus(ctx context.Context, userID uint) (*authapp.TwoFactorStatusResult, error)
 	ResetUserTwoFactorByAdmin(ctx context.Context, userID uint) error
-	UsesSub2Authority() bool
-}
-
-type sub2IdentityAuthority interface {
-	IsSub2IdentityBound(ctx context.Context, userID uint) (bool, error)
-	CheckExternalIdentity(ctx context.Context, userID uint) error
 }
 
 // Service 聚合后台域服务依赖。
@@ -97,7 +91,6 @@ type Service struct {
 	conversationEventSvc                       conversationEventService
 	logCleanupService                          logCleanupService
 	authSecurityService                        authSecurityService
-	sub2IdentityAuthority                      sub2IdentityAuthority
 	subscriptionResolver                       subscriptionResolver
 	openWebUIRowLoader                         openWebUIRowLoader
 	permissionGroupRepo                        permissionGroupRepo
@@ -207,12 +200,6 @@ func (s *Service) SetOpenWebUIRowLoader(loader openWebUIRowLoader) {
 // SetAuthSecurityService 注入认证安全校验能力。
 func (s *Service) SetAuthSecurityService(service authSecurityService) {
 	s.authSecurityService = service
-}
-
-// SetSub2IdentityAuthority injects the optional authority gate for user fields
-// that must not be locally overridden in Sub2 mode.
-func (s *Service) SetSub2IdentityAuthority(authority sub2IdentityAuthority) {
-	s.sub2IdentityAuthority = authority
 }
 
 // SetSystemEventService 注入系统事件查询能力。
@@ -536,26 +523,15 @@ func (s *Service) applyTwoFactorView(ctx context.Context, view userview.UserView
 	return view, nil
 }
 
-// resolveBillingAuthorityMode returns the configured authority without allowing
-// local admin/import paths to mint a password identity in Sub2 mode.
-func (s *Service) resolveBillingAuthorityMode(ctx context.Context) (string, error) {
-	if s.authSecurityService != nil && s.authSecurityService.UsesSub2Authority() {
-		return "sub2", nil
-	}
-	if s.subscriptionResolver == nil {
-		return "self", nil
-	}
-	return s.subscriptionResolver.GetBillingMode(ctx)
-}
-
 // CreateUser 创建普通用户。
 func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*domainuser.User, error) {
-	billingMode, err := s.resolveBillingAuthorityMode(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if strings.EqualFold(strings.TrimSpace(billingMode), "sub2") {
-		return nil, authapp.ErrSub2AuthorityRequired
+	billingMode := "self"
+	if s.subscriptionResolver != nil {
+		mode, err := s.subscriptionResolver.GetBillingMode(ctx)
+		if err != nil {
+			return nil, err
+		}
+		billingMode = mode
 	}
 	return s.userService.CreateUser(
 		ctx,
@@ -661,23 +637,6 @@ func (s *Service) RevokeUserSessionsByAdmin(
 	return nil
 }
 
-func (s *Service) ensureSub2ManagedFieldPolicy(ctx context.Context, userID uint, localAuthorityFieldChange bool) error {
-	if s.sub2IdentityAuthority == nil || userID == 0 {
-		return nil
-	}
-	bound, err := s.sub2IdentityAuthority.IsSub2IdentityBound(ctx, userID)
-	if err != nil || !bound {
-		return err
-	}
-	if err = s.sub2IdentityAuthority.CheckExternalIdentity(ctx, userID); err != nil {
-		return err
-	}
-	if localAuthorityFieldChange {
-		return ErrSub2AuthorityManaged
-	}
-	return nil
-}
-
 // UpdateUserStatusByAdmin 修改普通用户状态。
 func (s *Service) UpdateUserStatusByAdmin(ctx context.Context, input UpdateUserStatusInput) (*domainuser.User, error) {
 	nextStatus := strings.TrimSpace(input.Status)
@@ -687,9 +646,6 @@ func (s *Service) UpdateUserStatusByAdmin(ctx context.Context, input UpdateUserS
 
 	targetUser, err := s.userService.GetByID(ctx, input.TargetUserID)
 	if err != nil {
-		return nil, err
-	}
-	if err = s.ensureSub2ManagedFieldPolicy(ctx, input.TargetUserID, true); err != nil {
 		return nil, err
 	}
 	actorUser, err := s.getActorUser(ctx, input.ActorUserID)
@@ -787,9 +743,6 @@ func (s *Service) PatchUserByAdmin(ctx context.Context, input PatchUserByAdminIn
 		return nil, err
 	}
 	if err = ensureActorCanManageTarget(actorUser, targetUser); err != nil {
-		return nil, err
-	}
-	if err = s.ensureSub2ManagedFieldPolicy(ctx, input.TargetUserID, input.Patch.Role != nil || input.Patch.Status != nil); err != nil {
 		return nil, err
 	}
 
@@ -935,9 +888,6 @@ func (s *Service) PatchUserByAdmin(ctx context.Context, input PatchUserByAdminIn
 		billingMode, modeErr := s.subscriptionResolver.GetBillingMode(ctx)
 		if modeErr != nil {
 			return nil, modeErr
-		}
-		if strings.EqualFold(strings.TrimSpace(billingMode), "sub2") {
-			return nil, billing.ErrSub2AuthorityRequired
 		}
 		if billingMode != "period" {
 			return nil, billing.ErrPaymentRequired
@@ -1098,9 +1048,6 @@ func normalizeAdminLocale(raw string) (string, error) {
 
 // ResetUserPasswordByAdmin 重置用户密码并吊销全部会话。
 func (s *Service) ResetUserPasswordByAdmin(ctx context.Context, input ResetUserPasswordInput) error {
-	if err := s.ensureSub2ManagedFieldPolicy(ctx, input.TargetUserID, true); err != nil {
-		return err
-	}
 	targetUser, err := s.userService.GetByID(ctx, input.TargetUserID)
 	if err != nil {
 		return err
@@ -1169,9 +1116,6 @@ func (s *Service) ResetUserTwoFactorByAdmin(
 	ip string,
 	userAgent string,
 ) error {
-	if err := s.ensureSub2ManagedFieldPolicy(ctx, targetUserID, true); err != nil {
-		return err
-	}
 	targetUser, err := s.userService.GetByID(ctx, targetUserID)
 	if err != nil {
 		return err

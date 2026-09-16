@@ -3,7 +3,6 @@ package httpx
 import (
 	"context"
 	"fmt"
-	sub2http "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/sub2"
 	"net/http"
 	"os"
 	"path"
@@ -54,7 +53,6 @@ type HealthChecker interface {
 
 // Modules 聚合可注册的业务模块。
 type Modules struct {
-	Sub2              *sub2http.Module
 	Auth              *authhttp.Module
 	AuthService       middleware.SessionValidator
 	Channel           *channelhttp.Module
@@ -159,9 +157,6 @@ func NewEngine(cfg *config.Runtime, log *zap.Logger, modules Modules, hc HealthC
 	if modules.Channel != nil {
 		modules.Channel.RegisterRoutes(authRequired)
 	}
-	if modules.Sub2 != nil {
-		modules.Sub2.RegisterRoutes(authRequired)
-	}
 	if modules.Memory != nil {
 		modules.Memory.RegisterRoutes(authRequired)
 	}
@@ -195,9 +190,6 @@ func NewEngine(cfg *config.Runtime, log *zap.Logger, modules Modules, hc HealthC
 	if modules.Admin != nil || modules.Auth != nil || modules.Billing != nil || modules.Channel != nil || modules.MCP != nil || modules.Settings != nil || modules.Announcement != nil || modules.PromptPreset != nil || modules.Skill != nil || modules.KnowledgeBase != nil || modules.ContentModeration != nil {
 		adminGroup := authRequired.Group("/admin")
 		adminGroup.Use(middleware.AdminOnly())
-		if modules.Sub2 != nil {
-			modules.Sub2.RegisterAdminRoutes(adminGroup)
-		}
 		if modules.Auth != nil {
 			modules.Auth.RegisterAdminRoutes(adminGroup)
 		}

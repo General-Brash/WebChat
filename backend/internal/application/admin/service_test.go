@@ -3,7 +3,6 @@ package admin
 import (
 	"context"
 	"errors"
-	authapp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/auth"
 	"testing"
 	"time"
 
@@ -445,74 +444,6 @@ func TestImportOpenWebUIUsersRequiresRowLoader(t *testing.T) {
 	}
 }
 
-func TestImportOpenWebUIUsersRejectsSub2Authority(t *testing.T) {
-	userService := newAdminUserServiceFake(map[uint]domainuser.User{
-		1: {ID: 1, Role: domainuser.RoleAdmin},
-	})
-	service := NewService(userService, auditServiceFake{})
-	service.SetOpenWebUIRowLoader(openWebUIRowLoaderFake{rows: []repository.OpenWebUIUserRow{{
-		PublicID: "ow-user-1",
-		Username: "alice",
-		Email:    "alice@example.com",
-		Balance:  1,
-	}}})
-	service.SetSubscriptionResolver(subscriptionResolverFake{billingMode: "sub2"})
-
-	_, err := service.ImportOpenWebUIUsers(
-		context.Background(),
-		"req_1",
-		1,
-		OpenWebUIImportInput{DSN: "sqlite:///tmp/openwebui.db", CreditMultiplier: 1},
-		"127.0.0.1",
-		"test",
-	)
-	if !errors.Is(err, authapp.ErrSub2AuthorityRequired) {
-		t.Fatalf("expected Sub2 identity authority guard, got %v", err)
-	}
-	if len(userService.importedRecords) != 0 {
-		t.Fatalf("financially blocked import wrote %d records", len(userService.importedRecords))
-	}
-}
-
-func TestImportOpenWebUIUsersRejectsZeroBalanceInSub2Authority(t *testing.T) {
-	userService := newAdminUserServiceFake(map[uint]domainuser.User{
-		1: {ID: 1, Role: domainuser.RoleAdmin},
-	})
-	service := NewService(userService, auditServiceFake{})
-	service.SetOpenWebUIRowLoader(openWebUIRowLoaderFake{rows: []repository.OpenWebUIUserRow{{
-		PublicID: "ow-user-1",
-		Username: "alice",
-		Email:    "alice@example.com",
-		Balance:  1,
-	}}})
-	service.SetSubscriptionResolver(subscriptionResolverFake{billingMode: "sub2"})
-
-	_, err := service.ImportOpenWebUIUsers(
-		context.Background(),
-		"req_1",
-		1,
-		OpenWebUIImportInput{DSN: "sqlite:///tmp/openwebui.db", CreditMultiplier: 0},
-		"127.0.0.1",
-		"test",
-	)
-	if !errors.Is(err, authapp.ErrSub2AuthorityRequired) {
-		t.Fatalf("expected Sub2 identity authority guard, got %v", err)
-	}
-	if len(userService.importedRecords) != 0 {
-		t.Fatalf("identity-blocked import wrote %d records", len(userService.importedRecords))
-	}
-}
-
-func TestCreateUserRejectsLocalPasswordIdentityInSub2Authority(t *testing.T) {
-	service := NewService(newAdminUserServiceFake(map[uint]domainuser.User{}), auditServiceFake{})
-	service.SetAuthSecurityService(sub2AuthSecurityServiceFake{enabled: true})
-
-	_, err := service.CreateUser(context.Background(), CreateUserInput{Username: "local-user", Password: "local-password"})
-	if !errors.Is(err, authapp.ErrSub2AuthorityRequired) {
-		t.Fatalf("expected Sub2 identity authority guard, got %v", err)
-	}
-}
-
 func TestImportOpenWebUIUsersMapsInvalidLoaderInputToDSNError(t *testing.T) {
 	service := NewService(newAdminUserServiceFake(map[uint]domainuser.User{
 		1: {ID: 1, Role: domainuser.RoleAdmin},
@@ -532,26 +463,10 @@ func TestImportOpenWebUIUsersMapsInvalidLoaderInputToDSNError(t *testing.T) {
 	}
 }
 
-type sub2AuthSecurityServiceFake struct {
-	enabled bool
-}
-
-func (s sub2AuthSecurityServiceFake) GetCurrentTwoFactorStatus(context.Context, uint) (*authapp.TwoFactorStatusResult, error) {
-	return &authapp.TwoFactorStatusResult{}, nil
-}
-
-func (s sub2AuthSecurityServiceFake) ResetUserTwoFactorByAdmin(context.Context, uint) error {
-	return nil
-}
-
-func (s sub2AuthSecurityServiceFake) UsesSub2Authority() bool { return s.enabled }
-
 type adminUserServiceFake struct {
 	users           map[uint]domainuser.User
 	updateFieldsErr error
 	superAdminCount *int64
-	importedRecords []repository.UserImportRecord
-	importErr       error
 }
 
 func newAdminUserServiceFake(users map[uint]domainuser.User) *adminUserServiceFake {
@@ -670,11 +585,7 @@ func (s *adminUserServiceFake) ListAllUsernames(context.Context) ([]string, erro
 	return usernames, nil
 }
 
-func (s *adminUserServiceFake) ImportUsersWithCredentialsAndBalances(_ context.Context, records []repository.UserImportRecord) ([]domainuser.User, error) {
-	s.importedRecords = append([]repository.UserImportRecord(nil), records...)
-	if s.importErr != nil {
-		return nil, s.importErr
-	}
+func (s *adminUserServiceFake) ImportUsersWithCredentialsAndBalances(context.Context, []repository.UserImportRecord) ([]domainuser.User, error) {
 	return []domainuser.User{}, nil
 }
 

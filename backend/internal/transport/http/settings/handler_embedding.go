@@ -8,9 +8,7 @@ import (
 	"time"
 
 	appembedding "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/embedding"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/filetrigger"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/response"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -106,31 +104,14 @@ func (h *Handler) TriggerReindex(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
-	bound, trigger, beginErr := filetrigger.Begin(ctx, middleware.MustUserID(c), 0, filetrigger.PurposeFileEmbedding)
-	if beginErr != nil {
-		response.ErrorFrom(c, http.StatusUnauthorized, beginErr)
-		return
-	}
-	submitted, err := h.embeddingSvc.ReindexStaleFiles(bound, trigger)
+	submitted, err := h.embeddingSvc.ReindexStaleFiles(ctx)
 	if err != nil {
-		switch {
-		case errors.Is(err, appembedding.ErrEmbeddingServiceNotConfigured):
+		if errors.Is(err, appembedding.ErrEmbeddingServiceNotConfigured) {
 			response.ErrorFrom(c, http.StatusBadRequest, err)
-		case errors.Is(err, appembedding.ErrReindexInitiatorRequired):
-			response.ErrorFrom(c, http.StatusBadRequest, err)
-		default:
-			response.InternalError(c)
+			return
 		}
-		return
-	}
-	status, statusErr := h.embeddingSvc.GetIndexStatus(ctx)
-	if statusErr != nil {
 		response.InternalError(c)
 		return
 	}
-	response.Success(c, EmbeddingReindexResponse{
-		Submitted: submitted, JobID: status.ReindexJobID, Status: status.ReindexStatus,
-		PayerUserID: trigger.TriggererUserID,
-		Message: "reindex intent queued; the authenticated administrator remains the payer across file owners",
-	})
+	response.Success(c, EmbeddingReindexResponse{Submitted: submitted, Message: "reindex jobs submitted"})
 }

@@ -32,8 +32,6 @@
   "resendIn": "Resend in {seconds}s",
   "debugCode": "Dev code: {code}",
   "providerLogin": "Continue with {provider}",
-  "sub2Login": "Continue with Sub2",
-  "sub2Description": "Sign in with the Sub2 account authority. Local password, registration, and third-party sign-in are disabled.",
   "alreadyHaveAccount": "Already have an account?",
   "noAccount": "No account?",
   "toasts": {

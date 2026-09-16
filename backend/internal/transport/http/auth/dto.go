@@ -244,9 +244,6 @@ type DeleteUserIdentityResponse struct {
 
 // LoginOptionsResponse describes the authentication methods available to the client.
 type LoginOptionsResponse struct {
-	Sub2AuthorityEnabled         bool                       `json:"sub2AuthorityEnabled"`
-	Sub2LoginPath                string                     `json:"sub2LoginPath"`
-	SSOOnly                      bool                       `json:"ssoOnly"`
 	UsernameEnabled              bool                       `json:"usernameEnabled"`
 	EmailEnabled                 bool                       `json:"emailEnabled"`
 	EmailRegistrationEnabled     bool                       `json:"emailRegistrationEnabled"`
@@ -733,9 +730,6 @@ func toEmailVerificationStartResponse(d *appauth.EmailChangeVerificationStartRes
 
 func toLoginOptionsResponse(d *appauth.LoginOptions) LoginOptionsResponse {
 	return LoginOptionsResponse{
-		Sub2AuthorityEnabled:         d.Sub2AuthorityEnabled,
-		Sub2LoginPath:                d.Sub2LoginPath,
-		SSOOnly:                      d.SSOOnly,
 		UsernameEnabled:              d.UsernameEnabled,
 		EmailEnabled:                 d.EmailEnabled,
 		EmailRegistrationEnabled:     d.EmailRegistrationEnabled,

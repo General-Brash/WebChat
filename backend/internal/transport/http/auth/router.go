@@ -18,9 +18,6 @@ func (m *Module) RegisterPublicRoutes(api *gin.RouterGroup) {
 	api.GET("/auth/providers/:slug/callback", m.Handler.ProviderCallback)
 	api.POST("/auth/providers/:slug/callback", m.Handler.CompleteProviderLogin)
 	api.POST("/auth/providers/:slug/exchange", m.Handler.ExchangeProviderAuthBridgeGrant)
-	api.GET("/auth/sub2/start", m.Handler.StartSub2Login)
-	api.GET("/auth/sub2/callback", m.Handler.Sub2Callback)
-	api.POST("/auth/sub2/callback", m.Handler.CompleteSub2Login)
 }
 
 // RegisterProtectedRoutes 注册需登录的鉴权路由。

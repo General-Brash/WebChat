@@ -74,10 +74,6 @@ func Models() []any {
 		&model.PermissionGroupModelAccess{},
 		&model.PermissionGroupModelRule{},
 		&model.PermissionGroupUserAccess{},
-		&model.Sub2IdentityBinding{},
-		&model.Sub2ExternalExecution{},
-		&model.Sub2ApplicationPublication{},
-		&model.EmbeddingReindexJob{},
 	}
 }
 
@@ -472,6 +468,3 @@ func copyUintPointer(value *uint) *uint {
 	copied := *value
 	return &copied
 }
-
-
-

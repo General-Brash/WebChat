@@ -41,8 +41,7 @@ type responsePayload struct {
 
 // Client 封装 OpenAI 兼容 embedding API 的 HTTP 调用能力。
 type Client struct {
-	requestExecutor func(portembedding.Request, *http.Request) (*http.Response, error)
-	httpClients     *outboundhttp.Pool
+	httpClients *outboundhttp.Pool
 }
 
 // New 创建带出站安全策略的 Client。
@@ -91,12 +90,7 @@ func (c *Client) CallAPI(ctx context.Context, input portembedding.Request) ([][]
 		req.Header.Set("Authorization", "Bearer "+input.APIKey)
 	}
 
-	var resp *http.Response
-	if c.requestExecutor != nil {
-		resp, err = c.requestExecutor(input, req)
-	} else {
-		resp, err = c.httpClients.Do(req, input.APIBase, "")
-	}
+	resp, err := c.httpClients.Do(req, input.APIBase, "")
 	if err != nil {
 		return nil, fmt.Errorf("embedding: http: %w", err)
 	}
@@ -143,8 +137,4 @@ func (c *Client) CloseIdleConnections() {
 	if c != nil && c.httpClients != nil {
 		c.httpClients.CloseIdleConnections()
 	}
-}
-
-func (c *Client) SetRequestExecutor(executor func(portembedding.Request, *http.Request) (*http.Response, error)) {
-	c.requestExecutor = executor
 }

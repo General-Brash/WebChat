@@ -5,7 +5,6 @@ import dynamic from "next/dynamic";
 import { useTranslations } from "next-intl";
 import * as React from "react";
 
-import { Sub2PoolManager } from "@/features/sub2/pool-manager";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -97,8 +96,6 @@ export function AdminUpstreamsPage() {
           }}
         />
       </div>
-
-      <Sub2PoolManager items={upstreams.pagedItems} onChanged={upstreams.load} />
 
       <TableToolbar
         query={upstreams.query}

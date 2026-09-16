@@ -3,7 +3,6 @@ package channel
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/url"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	domainchannel "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/channel"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
-	"github.com/google/uuid"
 )
 
 const (
@@ -157,52 +155,6 @@ func (s *Service) TestUpstreamModelRoute(ctx context.Context, upstreamID uint, r
 	return s.probeRoute(ctx, *row)
 }
 
-func prepareModelProbeRoot(ctx context.Context) (context.Context, error) {
-	if ctx == nil {
-		return ctx, llm.ErrTrustedTriggerRequired
-	}
-	subject := llm.ExecutionSubjectFromContext(ctx)
-	if !subject.HasTriggerer() {
-		return ctx, llm.ErrTrustedTriggerRequired
-	}
-	if strings.TrimSpace(subject.ExecutionID) != "" {
-		return ctx, nil
-	}
-	trigger := subject.TrustedTriggerContext
-	trigger.TriggererUserID = subject.TriggererUserID
-	if strings.TrimSpace(trigger.Purpose) == "" {
-		trigger.Purpose = "model.probe"
-	}
-	if strings.TrimSpace(trigger.RunID) == "" {
-		trigger.RunID = "model_probe_" + uuid.NewString()
-	}
-	trigger.ExecutionID = uuid.NewString()
-	if trigger.CreatedAt.IsZero() {
-		trigger.CreatedAt = time.Now().UTC()
-	}
-	return llm.WithTrustedTriggerContext(ctx, trigger)
-}
-
-func prepareModelProbeChild(ctx context.Context, row repository.ChannelUpstreamRouteRow) (context.Context, error) {
-	subject := llm.ExecutionSubjectFromContext(ctx)
-	if !subject.HasTriggerer() {
-		return ctx, llm.ErrTrustedTriggerRequired
-	}
-	if strings.TrimSpace(subject.ExecutionID) == "" {
-		return ctx, llm.ErrTrustedExecutionChildInvalid
-	}
-	childID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(strings.Join([]string{
-		"deeix-chat:model-probe",
-		subject.RunID,
-		subject.ExecutionID,
-		strings.TrimSpace(row.Protocol),
-		fmt.Sprintf("%d", row.UpstreamID),
-		fmt.Sprintf("%d", row.RouteID),
-		strings.TrimSpace(row.UpstreamModelName),
-	}, "\x00"))).String()
-	return llm.WithTrustedExecutionChild(ctx, childID)
-}
-
 func filterModelProbeRows(rows []repository.ChannelUpstreamRouteRow, taskType string) []repository.ChannelUpstreamRouteRow {
 	result := make([]repository.ChannelUpstreamRouteRow, 0, len(rows))
 	for _, row := range rows {
@@ -308,7 +260,6 @@ func (s *Service) probeRoute(ctx context.Context, row repository.ChannelUpstream
 	attributionReferer, attributionTitle := s.llmAttribution()
 	routeConfig := modelProbeRouteConfig(resolved, attributionReferer, attributionTitle)
 	input := llm.GenerateInput{
-		ExecutionID: uuid.NewString(),
 		Messages: []llm.Message{
 			{Role: "user", Content: "Reply with OK."},
 		},
@@ -321,21 +272,8 @@ func (s *Service) probeRoute(ctx context.Context, row repository.ChannelUpstream
 		},
 	}
 
-	probeRoot, rootErr := prepareModelProbeRoot(ctx)
-	if rootErr != nil {
-		return nil, rootErr
-	}
-	providerCtx, trustErr := prepareModelProbeChild(probeRoot, row)
-	if trustErr != nil {
-		return nil, trustErr
-	}
-	trustedTrigger := llm.ExecutionSubjectFromContext(providerCtx).TrustedTriggerContext
-	input.RunID = trustedTrigger.RunID
-	input.ExecutionID = trustedTrigger.ExecutionID
-	input.TriggerContext = &trustedTrigger
-
 	startedAt := time.Now()
-	output, err := s.llmClient.Generate(providerCtx, routeConfig, input)
+	output, err := s.llmClient.Generate(ctx, routeConfig, input)
 	latencyMS := time.Since(startedAt).Milliseconds()
 	if err != nil {
 		return s.failedModelProbeFromError(row, routeConfig, err, latencyMS), nil

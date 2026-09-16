@@ -15,14 +15,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/filetrigger"
 	appstorage "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/objectstorage"
 	domainconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	domainuser "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/user"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/conv"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/filetype"
-	portllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/objectstore"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/pagination"
@@ -70,16 +68,13 @@ type uploadContentGate struct {
 
 // UploadFileInput 定义文件上传请求。
 type UploadFileInput struct {
-	UserID    uint
-	Ownership FileOwnership
-	// TriggerContext is server-owned metadata captured from a verified request
-	// context. UserID remains an owner/access input and is never the payer.
-	TriggerContext *portllm.TrustedTriggerContext `json:"-"`
-	Purpose        string
-	FileName       string
-	MimeType       string
-	DeclaredSize   int64
-	Reader         io.Reader
+	UserID       uint
+	Ownership    FileOwnership
+	Purpose      string
+	FileName     string
+	MimeType     string
+	DeclaredSize int64
+	Reader       io.Reader
 }
 
 // FileOwnership 定义文件所属的存储账户。
@@ -218,29 +213,7 @@ func (s *Service) UploadFile(ctx context.Context, input UploadFileInput) (*Uploa
 		normalizedMIME = "application/octet-stream"
 	}
 
-	authenticatedActorID := portllm.ExecutionSubjectFromContext(ctx).TriggererUserID
-	lookupUserID := input.UserID
-	if input.Ownership == FileOwnershipSystem {
-		// Platform storage is owner 0, but the active authenticated account is
-		// still loaded for the server-side authorization boundary.
-		if authenticatedActorID > 0 {
-			lookupUserID = authenticatedActorID
-		}
-	} else if input.TriggerContext != nil && input.TriggerContext.ResourceOwnerUserID > 0 {
-		// A trusted server operation may act for an authorized resource owner B
-		// while actor A remains the payer. The owner comes from the trusted
-		// envelope, never from the actor field or a browser-supplied payer ID.
-		lookupUserID = input.TriggerContext.ResourceOwnerUserID
-	} else if authenticatedActorID > 0 {
-		// The verified server subject is authoritative for the authenticated
-		// account when no separate trusted resource owner was supplied.
-		lookupUserID = authenticatedActorID
-	}
-	if lookupUserID == 0 {
-		return nil, s.errInvalidFileReference()
-	}
-
-	userItem, err := s.repo.GetUserByID(ctx, lookupUserID)
+	userItem, err := s.repo.GetUserByID(ctx, input.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +231,7 @@ func (s *Service) UploadFile(ctx context.Context, input UploadFileInput) (*Uploa
 	}
 
 	fileID := "file_" + conv.NormalizePublicID(uuid.NewString())
-	ownerUserID := lookupUserID
+	ownerUserID := input.UserID
 	quotaBytes := cfg.UserStorageQuotaBytes
 	storageOwner := strings.TrimSpace(userItem.PublicID)
 	if input.Ownership == FileOwnershipSystem {
@@ -268,16 +241,6 @@ func (s *Service) UploadFile(ctx context.Context, input UploadFileInput) (*Uploa
 	} else if input.Ownership != "" && input.Ownership != FileOwnershipUser {
 		return nil, s.errInvalidFileReference()
 	}
-	operationCtx, trigger, hasTrigger, err := s.resolveTrustedUploadContext(
-		ctx,
-		input.TriggerContext,
-		ownerUserID,
-		filetrigger.PurposeFileExtract,
-	)
-	if err != nil {
-		return nil, err
-	}
-	ctx = operationCtx
 	if storageOwner == "" {
 		storageOwner = fmt.Sprintf("uid_%d", userItem.ID)
 	}
@@ -356,9 +319,6 @@ func (s *Service) UploadFile(ctx context.Context, input UploadFileInput) (*Uploa
 		ExtractorVersion: s.resolveExtractorVersion(),
 		ExpiresAt:        nil,
 	}
-	if hasTrigger {
-		filetrigger.ApplyToFileObject(fileItem, trigger)
-	}
 
 	quota, err := s.repo.CreateFileObjectAndConsumeQuota(ctx, fileItem, quotaBytes)
 	if err != nil && errors.Is(err, repository.ErrDuplicate) {
@@ -405,40 +365,6 @@ func (s *Service) UploadFile(ctx context.Context, input UploadFileInput) (*Uploa
 		Quota:  *quota,
 		Reused: false,
 	}, nil
-}
-
-func (s *Service) resolveTrustedUploadContext(
-	ctx context.Context,
-	provided *portllm.TrustedTriggerContext,
-	resourceOwnerUserID uint,
-	purpose string,
-) (context.Context, portllm.TrustedTriggerContext, bool, error) {
-	if provided != nil {
-		subject := portllm.ExecutionSubjectFromContext(ctx)
-		if !subject.HasTriggerer() || provided.TriggererUserID == 0 || provided.TriggererUserID != subject.TriggererUserID {
-			return ctx, portllm.TrustedTriggerContext{}, false, portllm.ErrTrustedTriggerRequired
-		}
-		if provided.ResourceOwnerUserID != resourceOwnerUserID || strings.TrimSpace(provided.Purpose) != purpose {
-			return ctx, portllm.TrustedTriggerContext{}, false, portllm.ErrTrustedTriggerMismatch
-		}
-		bound, _, err := filetrigger.Restore(ctx, *provided)
-		if err != nil {
-			return ctx, portllm.TrustedTriggerContext{}, false, err
-		}
-		return bound, portllm.ExecutionSubjectFromContext(bound).TrustedTriggerContext, true, nil
-	}
-
-	if portllm.ExecutionSubjectFromContext(ctx).HasTriggerer() {
-		bound, trigger, err := filetrigger.Ensure(ctx, resourceOwnerUserID, purpose)
-		if err != nil {
-			return ctx, portllm.TrustedTriggerContext{}, false, err
-		}
-		return bound, trigger, true, nil
-	}
-	// Legacy/internal callers without a verified actor may still upload and
-	// complete deterministic local work. A later paid provider stage must not
-	// infer an actor from owner or worker state.
-	return ctx, portllm.TrustedTriggerContext{}, false, nil
 }
 
 // acquireUploadGate 获取同一内容的上传互斥许可，保证相同内容的并发上传串行执行；

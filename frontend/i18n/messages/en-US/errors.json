@@ -87,11 +87,7 @@
     "verificationMethodUnavailable": "The selected verification method is unavailable.",
     "verificationCodeAttemptsExceeded": "Too many verification attempts. Request a new code.",
     "verificationCodeInvalid": "Verification code is invalid or expired.",
-    "verificationCodeRecent": "A verification code was sent recently. Try again later.",
-    "sub2AuthorityRequired": "This account and its financial operations are managed by Sub2."
-  },
-  "sub2": {
-    "billingAuthorityRequired": "This financial operation must be completed through the Sub2 authority."
+    "verificationCodeRecent": "A verification code was sent recently. Try again later."
   },
   "billing": {
     "insufficientBalance": "Insufficient balance.",

@@ -37,9 +37,8 @@ const upstreamRequestIDHeaderTemplate = "${DEEIX_UPSTREAM_REQUEST_ID}"
 
 // Client 负责跨厂商共享的 HTTP client、adapter 路由和上游调试能力。
 type Client struct {
-	requestExecutor func(portllm.RouteConfig, *http.Request) (*http.Response, error)
-	httpClients     *outboundhttp.Pool
-	adapters        map[string]transportAdapter
+	httpClients *outboundhttp.Pool
+	adapters    map[string]transportAdapter
 }
 
 func normalizeConnectTimeoutMS(ms int) int {
@@ -569,9 +568,6 @@ func (c *Client) doRouteRequest(route portllm.RouteConfig, request *http.Request
 	if request == nil || request.URL == nil {
 		return nil, fmt.Errorf("model provider request is nil")
 	}
-	if c.requestExecutor != nil {
-		return c.requestExecutor(route, request)
-	}
 	connectTimeoutMS := normalizeConnectTimeoutMS(route.ConnectTimeoutMS)
 	return c.httpClients.Do(request, route.BaseURL, strconv.Itoa(connectTimeoutMS))
 }
@@ -580,8 +576,9 @@ func (c *Client) doRouteGenerationRequest(route portllm.RouteConfig, request *ht
 	if request == nil || request.URL == nil {
 		return nil, fmt.Errorf("model provider request is nil")
 	}
+	connectTimeoutMS := normalizeConnectTimeoutMS(route.ConnectTimeoutMS)
 	return doGenerationRequest(func(tracedRequest *http.Request) (*http.Response, error) {
-		return c.doRouteRequest(route, tracedRequest)
+		return c.httpClients.Do(tracedRequest, route.BaseURL, strconv.Itoa(connectTimeoutMS))
 	}, request)
 }
 
@@ -1480,11 +1477,4 @@ func firstNonZero(values ...int64) int64 {
 		}
 	}
 	return 0
-}
-
-// SetRequestExecutor is a composition-only hook for the authority transport.
-// A configured authority owns every adapter request, including status polling;
-// it cannot fall through to the ordinary provider HTTP pool.
-func (c *Client) SetRequestExecutor(executor func(portllm.RouteConfig, *http.Request) (*http.Response, error)) {
-	c.requestExecutor = executor
 }

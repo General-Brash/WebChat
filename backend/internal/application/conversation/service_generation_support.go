@@ -53,7 +53,7 @@ func (s *Service) embedMessagePair(ctx context.Context, conversationID uint, use
 	if len(chunks) == 0 {
 		return
 	}
-	embeddings, embeddingSignature, err := s.embeddingSvc.EmbedTextsWithSignatureFor(ctx, texts, "message.embedding")
+	embeddings, embeddingSignature, err := s.embeddingSvc.EmbedTextsWithSignature(ctx, texts)
 	if err != nil {
 		s.logger.Warn("embed_message_pair_failed", zap.Error(err))
 		return
@@ -92,7 +92,7 @@ func (s *Service) recallSemanticContext(ctx context.Context, scope repository.Hi
 	if s.embeddingSvc == nil || !scope.Valid() || strings.TrimSpace(query) == "" {
 		return nil
 	}
-	embeddings, embeddingSignature, err := s.embeddingSvc.EmbedTextsWithSignatureFor(ctx, []string{query}, "message.recall")
+	embeddings, embeddingSignature, err := s.embeddingSvc.EmbedTextsWithSignature(ctx, []string{query})
 	if err != nil || len(embeddings) == 0 {
 		return nil
 	}
@@ -148,56 +148,40 @@ func (s *Service) callCompactLLM(ctx context.Context, platformModelName string, 
 
 	attributionReferer, attributionTitle := s.llmAttribution()
 	routeConfig := llm.RouteConfig{
-		UserID: route.UserID, UpstreamID: route.UpstreamID, RetailModel: route.PlatformModelName,
-		Protocol:             route.Protocol,
-		BaseURL:              route.BaseURL,
-		APIKey:               route.APIKey,
-		HeadersJSON:          route.HeadersJSON,
-		ConnectTimeoutMS:     route.ConnectTimeoutMS,
-		ReadTimeoutMS:        route.ReadTimeoutMS,
-		StreamIdleTimeoutMS:  route.StreamIdleTimeoutMS,
-		Endpoint:             llm.DefaultEndpointForAdapter(route.Protocol),
-		UpstreamModel:        route.UpstreamModel,
-		UpstreamModelRawJSON: route.UpstreamModelRawJSON,
-		AttributionReferer:   attributionReferer,
-		AttributionTitle:     attributionTitle,
+		Protocol:            route.Protocol,
+		BaseURL:             route.BaseURL,
+		APIKey:              route.APIKey,
+		HeadersJSON:         route.HeadersJSON,
+		ConnectTimeoutMS:    route.ConnectTimeoutMS,
+		ReadTimeoutMS:       route.ReadTimeoutMS,
+		StreamIdleTimeoutMS: route.StreamIdleTimeoutMS,
+		Endpoint:            llm.DefaultEndpointForAdapter(route.Protocol),
+		UpstreamModel:       route.UpstreamModel,
+		AttributionReferer:  attributionReferer,
+		AttributionTitle:    attributionTitle,
 	}
 	startedAt := time.Now()
 	generateInput := buildTextTaskGenerateInput(route, s.cfg.Snapshot(), llmMsgs)
 	var authorization *domainbilling.UsageAuthorization
 	billingCtx, hasBillingContext := ctx.Value(basicServiceBillingContextKey{}).(basicServiceBillingContext)
 	if hasBillingContext {
-		generateInput.UserID = billingCtx.UserID
-	}
-	resourceOwnerUserID := generateInput.UserID
-	if resourceOwnerUserID == 0 {
-		resourceOwnerUserID = llm.ExecutionSubjectFromContext(ctx).ResourceOwnerUserID
-	}
-	providerCtx, trustedTrigger, trustErr := prepareTrustedProviderExecution(
-		ctx, &generateInput, resourceOwnerUserID, trustedPurposeChatMain,
-		llm.ExecutionSubjectFromContext(ctx).RunID,
-	)
-	if trustErr != nil {
-		return "", fmt.Errorf("compact trusted execution: %w", trustErr)
-	}
-	if hasBillingContext {
-		authorization, err = s.authorizeBasicServiceUsage(providerCtx, trustedTrigger.TriggererUserID, route.PlatformModelName, "compact")
+		authorization, err = s.authorizeBasicServiceUsage(ctx, billingCtx.UserID, route.PlatformModelName, "compact")
 		if err != nil {
 			return "", fmt.Errorf("compact usage authorization: %w", err)
 		}
 	}
-	out, err := s.llmClient.Generate(providerCtx, routeConfig, generateInput)
+	out, err := s.llmClient.Generate(ctx, routeConfig, generateInput)
 	if err != nil {
-		if releaseErr := s.releaseBasicServiceUsageAuthorization(providerCtx, authorization); releaseErr != nil {
+		if releaseErr := s.releaseBasicServiceUsageAuthorization(ctx, authorization); releaseErr != nil {
 			return "", errors.Join(fmt.Errorf("compact llm generate: %w", err), fmt.Errorf("release compact usage authorization: %w", releaseErr))
 		}
 		return "", fmt.Errorf("compact llm generate: %w", err)
 	}
 	text := strings.TrimSpace(out.Text)
 	if hasBillingContext {
-		if err = s.recordBasicServiceUsage(providerCtx, basicServiceUsageInput{
+		if err = s.recordBasicServiceUsage(ctx, basicServiceUsageInput{
 			Authorization:     authorization,
-			UserID:            trustedTrigger.TriggererUserID,
+			UserID:            billingCtx.UserID,
 			ConversationID:    billingCtx.ConversationID,
 			ServiceCode:       "compact",
 			ServiceName:       "上下文压缩",

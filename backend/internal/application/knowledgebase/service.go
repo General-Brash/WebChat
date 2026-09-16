@@ -8,7 +8,6 @@ import (
 
 	appaudit "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/audit"
 	appembedding "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/embedding"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/filetrigger"
 	appupload "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/upload"
 	domainconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	domainknowledgebase "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/knowledgebase"
@@ -107,13 +106,7 @@ func (s *Service) SubmitPlatformFileEmbeddings(ctx context.Context, actorUserID 
 	if s.fileEmbedder == nil {
 		return appembedding.TargetedSubmissionResult{}, appembedding.ErrEmbeddingServiceNotConfigured
 	}
-	// Platform reindexing is a new administrator-triggered operation. Capture
-	// the authenticated actor explicitly; owner 0 is the resource scope, not payer.
-	bound, _, err := filetrigger.Begin(ctx, actorUserID, 0, filetrigger.PurposeFileEmbedding)
-	if err != nil {
-		return appembedding.TargetedSubmissionResult{}, err
-	}
-	return s.fileEmbedder.SubmitFileEmbeddings(bound, 0, fileIDs)
+	return s.fileEmbedder.SubmitFileEmbeddings(ctx, 0, fileIDs)
 }
 
 // ResolveFileVectorizationCapabilities 返回知识库文件显式向量化能力的后端事实状态。
@@ -516,15 +509,9 @@ func (s *Service) UploadBuiltinFile(ctx context.Context, actorUserID uint, input
 	if actorUserID == 0 || s.fileUploader == nil {
 		return nil, ErrInvalidKnowledgeBase
 	}
-	bound, trigger, err := filetrigger.Ensure(ctx, 0, filetrigger.PurposeFileExtract)
-	if err != nil {
-		return nil, err
-	}
-	ctx = bound
 	input.UserID = actorUserID
 	input.Ownership = appupload.FileOwnershipSystem
 	input.Purpose = "knowledge_base"
-	input.TriggerContext = &trigger
 	return s.fileUploader.UploadFile(ctx, input)
 }
 

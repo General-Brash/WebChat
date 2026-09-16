@@ -31,8 +31,6 @@ type RateLimitDefaults struct {
 
 // Upstream 表示上游配置。
 type Upstream struct {
-	Kind                 string
-	Sub2GroupIDsJSON     string
 	ID                   uint
 	Name                 string
 	BaseURL              string

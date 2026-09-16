@@ -68,23 +68,6 @@ func (r *twoFactorConfirmRepo) UpdateUserTwoFactor(ctx context.Context, userID u
 	return r.GetUserTwoFactorByUserID(ctx, userID)
 }
 
-func TestGetCurrentTwoFactorStatusDisablesLocalTOTPInSub2Authority(t *testing.T) {
-	now := time.Now()
-	service := newTestService(config.Config{Sub2AuthorityMode: config.AuthorityModeSub2}, &twoFactorLookupRepo{item: &domainuser.UserTwoFactor{
-		UserID:      42,
-		TOTPEnabled: true,
-		EnabledAt:   &now,
-	}}, nil)
-
-	status, err := service.GetCurrentTwoFactorStatus(context.Background(), 42)
-	if err != nil {
-		t.Fatalf("expected Sub2 local TOTP status to be available without an error, got %v", err)
-	}
-	if status == nil || status.Available || status.TOTPEnabled || status.Required {
-		t.Fatalf("expected local TOTP to be unavailable in Sub2 mode, got %#v", status)
-	}
-}
-
 func TestConfirmCurrentTwoFactorSetupReturnsNotStartedWhenMissing(t *testing.T) {
 	service := newTestService(config.Config{}, &twoFactorLookupRepo{err: repository.ErrNotFound}, nil)
 

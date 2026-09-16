@@ -27,12 +27,6 @@ const (
 
 // RouteConfig 定义渠道路由调用参数。
 type RouteConfig struct {
-	UpstreamID uint
-	// RetailModel is the selected Chat/platform model. It is the identity used
-	// by the application catalog and billing policy; it is never substituted for
-	// the provider request model below.
-	RetailModel         string
-	UserID              uint
 	Protocol            string
 	BaseURL             string
 	APIKey              string
@@ -41,13 +35,9 @@ type RouteConfig struct {
 	ReadTimeoutMS       int // 非流式整体超时 / 流式首字节超时（默认 120s）
 	StreamIdleTimeoutMS int // 流式两个 chunk 之间最大间隔（默认 60s）
 	Endpoint            string
-	// UpstreamModel is the exact model identifier sent to the provider.
-	UpstreamModel string
-	// UpstreamModelRawJSON is non-sensitive catalog metadata used only for
-	// restricted-routing checks (for example source_group_ids).
-	UpstreamModelRawJSON string
-	AttributionReferer   string
-	AttributionTitle     string
+	UpstreamModel       string
+	AttributionReferer  string
+	AttributionTitle    string
 }
 
 // ContentPart 类型常量。
@@ -88,15 +78,6 @@ type Message struct {
 
 // GenerateInput 定义上游推理请求入参。
 type GenerateInput struct {
-	// UserID is the legacy resource-owner/access subject. It is never used as
-	// the payer selector; paid Sub2 dispatch requires TriggerContext instead.
-	UserID uint
-	// TriggerContext is server-owned metadata restored from a verified root or
-	// durable operation record. It is intentionally excluded from JSON so no
-	// browser/options payload can supply payer metadata.
-	TriggerContext         *TrustedTriggerContext `json:"-"`
-	RunID                  string
-	ExecutionID            string
 	RequestID              string
 	ConversationID         uint
 	ConversationPublicID   string
@@ -245,11 +226,7 @@ type ReasoningOutput struct {
 
 // GenerateOutput 定义上游推理结果。
 type GenerateOutput struct {
-	ResponseID string
-	// ReturnedModel is the provider-reported model identifier, when the
-	// provider returns one. It is diagnostic metadata only: request and billing
-	// identities remain RouteConfig.UpstreamModel and RouteConfig.RetailModel.
-	ReturnedModel       string
+	ResponseID          string
 	Text                string
 	Reasoning           *ReasoningOutput
 	Usage               Usage
@@ -305,11 +282,8 @@ type GenerateStreamEvent struct {
 
 // ModelItem 定义上游模型目录项。
 type ModelItem struct {
-	ID             string
-	OwnedBy        string
-	DisplayName    string
-	Protocols      []string
-	SourceGroupIDs []int64
+	ID      string
+	OwnedBy string
 }
 
 // UpstreamError 是上游 HTTP 调用错误。

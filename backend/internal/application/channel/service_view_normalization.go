@@ -19,7 +19,6 @@ import (
 
 func toUpstreamView(item repository.ChannelUpstreamListRow) UpstreamView {
 	return UpstreamView{
-		Kind: item.Kind, Sub2GroupIDs: decodeSub2GroupIDs(item.Sub2GroupIDsJSON),
 		ID:                   item.ID,
 		Name:                 item.Name,
 		BaseURL:              item.BaseURL,

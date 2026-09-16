@@ -7582,51 +7582,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/admin/sub2/{operation}": {
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "sub2"
-                ],
-                "summary": "Execute an authorized Sub2 application or financial command",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Allowlisted administrative operation",
-                        "name": "operation",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Operator command",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/ActionRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/AuthorityResponseDoc"
-                        }
-                    }
-                }
-            }
-        },
         "/admin/system-events": {
             "get": {
                 "security": [
@@ -14463,94 +14418,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/sub2/status": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "sub2"
-                ],
-                "summary": "Read Sub2 authority status",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/AuthorityStatusDoc"
-                        }
-                    }
-                }
-            }
-        },
-        "/sub2/{operation}": {
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Operations are explicitly allowlisted; identity is derived server-side. Unknown money results are not replayed.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "sub2"
-                ],
-                "summary": "Execute a scoped Sub2 user operation",
-                "parameters": [
-                    {
-                        "enum": [
-                            "wallet",
-                            "execution",
-                            "services-query",
-                            "cancel",
-                            "finance-config",
-                            "finance-plans",
-                            "finance-quote",
-                            "finance-purchase",
-                            "finance-checkout",
-                            "finance-orders",
-                            "finance-order",
-                            "finance-ledger",
-                            "finance-redeem",
-                            "finance-redemptions",
-                            "finance-refund-request",
-                            "finance-subscriptions"
-                        ],
-                        "type": "string",
-                        "description": "Operation",
-                        "name": "operation",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Command; never contains a subject assertion or provider key",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/ActionRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/AuthorityResponseDoc"
-                        }
-                    }
-                }
-            }
-        },
         "/temporary-chat/messages/stream": {
             "post": {
                 "security": [
@@ -14733,38 +14600,6 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "ActionRequest": {
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "object"
-                },
-                "executionID": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "integer"
-                },
-                "idempotencyKey": {
-                    "type": "string"
-                },
-                "payloadFingerprint": {
-                    "type": "string"
-                },
-                "query": {
-                    "type": "string"
-                },
-                "requestKey": {
-                    "type": "string"
-                },
-                "runID": {
-                    "type": "string"
-                },
-                "targetUserID": {
-                    "type": "integer"
-                }
-            }
-        },
         "ActiveMessageGenerationEventResponse": {
             "type": "object",
             "required": [
@@ -15815,55 +15650,6 @@ const docTemplate = `{
                     "type": "string",
                     "x-nullable": true,
                     "x-omitempty": false
-                }
-            }
-        },
-        "AuthorityResponseDoc": {
-            "type": "object",
-            "required": [
-                "data"
-            ],
-            "properties": {
-                "data": {
-                    "type": "object",
-                    "additionalProperties": true
-                }
-            }
-        },
-        "AuthorityStatusData": {
-            "type": "object",
-            "required": [
-                "enabled"
-            ],
-            "properties": {
-                "enabled": {
-                    "type": "boolean"
-                },
-                "groupRevision": {
-                    "type": "integer"
-                },
-                "issuer": {
-                    "type": "string"
-                },
-                "paidReady": {
-                    "type": "boolean"
-                },
-                "playerVersion": {
-                    "type": "integer"
-                },
-                "pricingVersion": {
-                    "type": "integer"
-                }
-            }
-        },
-        "AuthorityStatusDoc": {
-            "type": "object",
-            "required": [
-                "data"
-            ],
-            "properties": {
-                "data": {
-                    "$ref": "#/definitions/AuthorityStatusData"
                 }
             }
         },
@@ -18954,13 +18740,6 @@ const docTemplate = `{
                     "type": "string",
                     "maxLength": 10000
                 },
-                "kind": {
-                    "type": "string",
-                    "enum": [
-                        "direct",
-                        "sub2"
-                    ]
-                },
                 "name": {
                     "type": "string",
                     "maxLength": 128,
@@ -18982,12 +18761,6 @@ const docTemplate = `{
                 },
                 "streamIdleTimeoutMS": {
                     "type": "integer"
-                },
-                "sub2GroupIDs": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
                 }
             }
         },
@@ -20724,9 +20497,6 @@ const docTemplate = `{
                 "passwordResetEnabled",
                 "providerAuthBridge",
                 "providers",
-                "ssoOnly",
-                "sub2AuthorityEnabled",
-                "sub2LoginPath",
                 "turnstileRegistrationEnabled",
                 "turnstileSiteKey",
                 "usernameEnabled"
@@ -20752,15 +20522,6 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/IdentityProviderResponse"
                     }
-                },
-                "ssoOnly": {
-                    "type": "boolean"
-                },
-                "sub2AuthorityEnabled": {
-                    "type": "boolean"
-                },
-                "sub2LoginPath": {
-                    "type": "string"
                 },
                 "turnstileRegistrationEnabled": {
                     "type": "boolean"
@@ -26761,13 +26522,6 @@ const docTemplate = `{
                     "type": "string",
                     "maxLength": 10000
                 },
-                "kind": {
-                    "type": "string",
-                    "enum": [
-                        "direct",
-                        "sub2"
-                    ]
-                },
                 "name": {
                     "type": "string",
                     "maxLength": 128,
@@ -26789,12 +26543,6 @@ const docTemplate = `{
                 },
                 "streamIdleTimeoutMS": {
                     "type": "integer"
-                },
-                "sub2GroupIDs": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
                 }
             }
         },
@@ -27448,7 +27196,6 @@ const docTemplate = `{
                 "alreadySynced",
                 "bindingCode",
                 "boundPlatformModels",
-                "sourceGroupIDs",
                 "suggestedKindsJSON",
                 "suggestedPlatformModelName",
                 "suggestedProtocol",
@@ -27470,12 +27217,6 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "type": "string"
-                    }
-                },
-                "sourceGroupIDs": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
                     }
                 },
                 "suggestedKindsJSON": {
@@ -27621,9 +27362,6 @@ const docTemplate = `{
                 "id": {
                     "type": "integer"
                 },
-                "kind": {
-                    "type": "string"
-                },
                 "modelsCount": {
                     "type": "integer"
                 },
@@ -27641,12 +27379,6 @@ const docTemplate = `{
                 },
                 "streamIdleTimeoutMS": {
                     "type": "integer"
-                },
-                "sub2GroupIDs": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
                 },
                 "updatedAt": {
                     "type": "string"

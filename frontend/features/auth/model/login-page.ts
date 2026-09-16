@@ -10,7 +10,6 @@ export const DEFAULT_LOGIN_SETTINGS: LoginPageSettings = {
 };
 
 export const DEFAULT_LOGIN_OPTIONS: LoginOptionsData = {
-  sub2AuthorityEnabled: false, sub2LoginPath: "", ssoOnly: false,
   usernameEnabled: true,
   emailEnabled: true,
   emailRegistrationEnabled: true,

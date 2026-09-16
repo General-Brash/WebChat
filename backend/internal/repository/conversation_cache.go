@@ -2,11 +2,9 @@ package repository
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	domainconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
-	portllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 )
 
 const FileProcessingKindEmbedding = "embedding"
@@ -33,9 +31,6 @@ type FileProcessingMessage struct {
 	// EmbeddingSignature 与 EmbeddingHost 将显式向量化任务固定到接收任务时的运行时配置。
 	EmbeddingSignature string
 	EmbeddingHost      string
-	// TriggerContext 是 S1 定义的服务端可信操作信封。UserID 仍然只是访问/存储所有者；
-	// TriggerContext.TriggererUserID 才是后续付费消费者唯一可用的触发人。
-	TriggerContext portllm.TrustedTriggerContext
 }
 
 // GenerationStreamMessage 是生成流中的一条可恢复事件。
@@ -83,59 +78,13 @@ type GenerationStreamLease struct {
 	ExecutionID          string
 	UserID               uint
 	ConversationPublicID string
-	// TriggerContext is persisted with the lease and must remain immutable for the
-	// logical run. It is intentionally the existing llm trusted context, not a
-	// second payer policy or a serialized credential/assertion.
-	TriggerContext portllm.TrustedTriggerContext
-}
-
-// NormalizeTrustedTriggerContext trims stable server references without changing
-// their attribution semantics. Queue/lease adapters use this before encoding so
-// the same operation has a deterministic representation across backends.
-func NormalizeTrustedTriggerContext(trigger portllm.TrustedTriggerContext) portllm.TrustedTriggerContext {
-	trigger.Purpose = strings.TrimSpace(trigger.Purpose)
-	trigger.RunID = strings.TrimSpace(trigger.RunID)
-	trigger.ExecutionID = strings.TrimSpace(trigger.ExecutionID)
-	trigger.ParentExecutionID = strings.TrimSpace(trigger.ParentExecutionID)
-	if !trigger.CreatedAt.IsZero() {
-		trigger.CreatedAt = trigger.CreatedAt.UTC()
-	}
-	return trigger
-}
-
-// HasTrustedTriggerMetadata distinguishes an absent legacy envelope from a
-// populated operation envelope. A zero TriggererUserID is allowed for local
-// deterministic work, but it never authorizes a paid provider call.
-func HasTrustedTriggerMetadata(trigger portllm.TrustedTriggerContext) bool {
-	trigger = NormalizeTrustedTriggerContext(trigger)
-	return trigger.TriggererUserID != 0 ||
-		trigger.ResourceOwnerUserID != 0 ||
-		trigger.Purpose != "" ||
-		trigger.RunID != "" ||
-		trigger.ExecutionID != "" ||
-		trigger.ParentExecutionID != "" ||
-		!trigger.CreatedAt.IsZero()
-}
-
-// SameTrustedTriggerContext compares the immutable operation attribution
-// fields. It deliberately does not introduce a fallback to owner or worker.
-func SameTrustedTriggerContext(left, right portllm.TrustedTriggerContext) bool {
-	left = NormalizeTrustedTriggerContext(left)
-	right = NormalizeTrustedTriggerContext(right)
-	return left.TriggererUserID == right.TriggererUserID &&
-		left.ResourceOwnerUserID == right.ResourceOwnerUserID &&
-		left.Purpose == right.Purpose &&
-		left.RunID == right.RunID &&
-		left.ExecutionID == right.ExecutionID &&
-		left.ParentExecutionID == right.ParentExecutionID &&
-		(left.CreatedAt.IsZero() && right.CreatedAt.IsZero() || left.CreatedAt.Equal(right.CreatedAt))
 }
 
 // FileProcessingQueueRepository 封装文件处理队列缓存能力。
 type FileProcessingQueueRepository interface {
 	InitFileProcessingStream(ctx context.Context) error
-	EnqueueFileProcessing(ctx context.Context, userID uint, fileID string, retry int, lastError string, trigger ...portllm.TrustedTriggerContext) error
-	EnqueueFileEmbedding(ctx context.Context, userID uint, fileID string, embeddingSignature string, embeddingHost string, trigger ...portllm.TrustedTriggerContext) error
+	EnqueueFileProcessing(ctx context.Context, userID uint, fileID string, retry int, lastError string) error
+	EnqueueFileEmbedding(ctx context.Context, userID uint, fileID string, embeddingSignature string, embeddingHost string) error
 	ClaimTimedOutFileProcessingMessages(ctx context.Context, consumerName string) ([]FileProcessingMessage, error)
 	ClaimTimedOutFileEmbeddingMessages(ctx context.Context, consumerName string) ([]FileProcessingMessage, error)
 	ReadFileProcessingMessages(ctx context.Context, consumerName string) ([]FileProcessingMessage, error)
@@ -158,9 +107,6 @@ type GenerationStreamCacheRepository interface {
 	// 逻辑运行归属保留期间拒绝其他执行接管。
 	ClaimGenerationStream(ctx context.Context, lease GenerationStreamLease, leaseTTL time.Duration, ownershipTTL time.Duration) (bool, error)
 	GetGenerationStreamOwner(ctx context.Context, runID string) (uint, bool, error)
-	// GetGenerationStreamLease returns the shared active lease for cross-instance
-	// moderation and recovery callers that do not own a local runtime map entry.
-	GetGenerationStreamLease(ctx context.Context, runID string) (GenerationStreamLease, bool, error)
 	RenewGenerationStreamLease(ctx context.Context, lease GenerationStreamLease, leaseTTL time.Duration, ownershipTTL time.Duration) (bool, error)
 	CompleteGenerationStream(ctx context.Context, lease GenerationStreamLease, retention time.Duration) (bool, error)
 	AbandonGenerationStream(ctx context.Context, lease GenerationStreamLease) (bool, error)

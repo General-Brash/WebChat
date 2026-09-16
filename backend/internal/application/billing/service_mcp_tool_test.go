@@ -1,10 +1,6 @@
 package billing
 
-import (
-	"testing"
-
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/nativetool"
-)
+import "testing"
 
 func TestBuildMCPToolServiceItemsBillsSnapshotPricePerCall(t *testing.T) {
 	input := UsagePricingInput{
@@ -61,42 +57,5 @@ func TestMCPToolUsageSnapshotsKeepUnpricedUsageVisible(t *testing.T) {
 	}
 	if snapshots[0]["server_name"] != "exa" || snapshots[0]["call_count"] != int64(2) {
 		t.Fatalf("unexpected snapshot: %#v", snapshots[0])
-	}
-}
-
-func TestBuildNativeToolServiceItemsUsesModelDiscount(t *testing.T) {
-	input := UsagePricingInput{
-		PlatformModelName: "gpt-test",
-		ProviderProtocol:  "openai_chat_completions",
-		ServerSideToolUsage: map[string]int64{
-			"web_search": 2,
-		},
-	}
-	items, total := buildNativeToolServiceItems(nativeToolServiceItemsInput{
-		Usage:          input,
-		BillingMode:    "balance",
-		BillingEnabled: true,
-		RateMultiplier: billingRateMultiplier{Numerator: 4, Denominator: 5},
-		PricingOverrides: map[string]nativetool.PricingOverride{
-			"openai.web_search": {PriceNanousd: 10_000_000, Unit: "call", Billable: true},
-		},
-		Definitions: []nativetool.Definition{{
-			Protocol:     "openai_chat_completions",
-			Provider:     "OpenAI",
-			Type:         "web_search",
-			Key:          "openai.web_search",
-			PriceNanousd: 10_000_000,
-			BillingUnit:  "call",
-			UsageAliases: []string{"web_search"},
-		}},
-	})
-	if len(items) != 1 {
-		t.Fatalf("expected one native tool item, got %#v", items)
-	}
-	if items[0].RateMultiplier != 0.8 || items[0].CallNanousdPerCall != 8_000_000 || items[0].BilledNanousd != 16_000_000 {
-		t.Fatalf("native tool did not use model discount: %#v", items[0])
-	}
-	if total != 16_000_000 {
-		t.Fatalf("native tool total = %d, want 16000000", total)
 	}
 }

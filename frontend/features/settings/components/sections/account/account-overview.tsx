@@ -90,7 +90,6 @@ export function AccountOverviewSection({
   onOpenDeleteDialog: () => void;
 }) {
   const t = useTranslations("settings.accountPage");
-  const sub2Managed = viewer?.passwordOrigin === "sso_placeholder";
 
   return (
     <SettingsSection title={t("title")}>
@@ -123,15 +122,14 @@ export function AccountOverviewSection({
 
       <ActionRow
         title={t("password")}
-        value={sub2Managed ? t("sub2ManagedDescription") : undefined}
         action={
           <Button
             type="button"
             variant="outline"
-            disabled={loading || changingPassword || sub2Managed}
+            disabled={loading || changingPassword}
             onClick={onOpenPasswordDialog}
           >
-            {sub2Managed ? t("sub2Managed") : viewer?.passwordEnabled ? t("actions.update") : t("actions.set")}
+            {viewer?.passwordEnabled ? t("actions.update") : t("actions.set")}
           </Button>
         }
       />
@@ -139,15 +137,14 @@ export function AccountOverviewSection({
       {twoFactorAvailable ? (
         <ActionRow
           title={t("twoFactor")}
-          value={sub2Managed ? t("sub2ManagedDescription") : undefined}
           action={
             <Button
               type="button"
               variant="outline"
-              disabled={loading || twoFactorOpening || sub2Managed}
+              disabled={loading || twoFactorOpening}
               onClick={twoFactorEnabled ? onOpenTwoFactorDialog : onStartTwoFactorSetup}
             >
-              {sub2Managed ? t("sub2Managed") : twoFactorOpening ? <SpinnerLabel>{t("actions.generating")}</SpinnerLabel> : twoFactorEnabled ? t("actions.manage") : t("actions.set")}
+              {twoFactorOpening ? <SpinnerLabel>{t("actions.generating")}</SpinnerLabel> : twoFactorEnabled ? t("actions.manage") : t("actions.set")}
             </Button>
           }
         />

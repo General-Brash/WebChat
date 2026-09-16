@@ -2,8 +2,6 @@ package channel
 
 // CreateUpstreamInput 定义创建上游入参。
 type CreateUpstreamInput struct {
-	Kind                 string
-	Sub2GroupIDs         []int64
 	Name                 string
 	BaseURL              string
 	Compatible           string
@@ -23,8 +21,6 @@ type CreateUpstreamInput struct {
 
 // UpdateUpstreamInput 定义更新上游入参。
 type UpdateUpstreamInput struct {
-	Kind                 *string
-	Sub2GroupIDs         *[]int64
 	Name                 *string
 	BaseURL              *string
 	Compatible           *string

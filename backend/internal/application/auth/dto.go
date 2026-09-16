@@ -17,7 +17,6 @@ type LoginResult struct {
 	TwoFactorRequired       bool
 	TwoFactorChallengeToken string
 	VerificationMethods     []SecurityVerificationMethod
-	RedirectPath            string
 }
 
 // MeResult 当前用户信息内部传输结构，不携带序列化标记。

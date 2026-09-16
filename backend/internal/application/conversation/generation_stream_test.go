@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	portllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	cachememory "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/cache/memory"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 )
@@ -27,24 +26,6 @@ func registerTestGeneration(
 	ctx, release, ok := registry.acquireRun(context.Background())
 	if !ok {
 		t.Fatal("expected generation lifecycle acquisition")
-	}
-	var err error
-	ctx, err = portllm.WithAuthenticatedExecutionSubject(ctx, userID, runID)
-	if err != nil {
-		release()
-		t.Fatalf("bind generation actor: %v", err)
-	}
-	ctx, err = portllm.WithTrustedTriggerContext(ctx, portllm.TrustedTriggerContext{
-		TriggererUserID:     userID,
-		ResourceOwnerUserID: userID,
-		Purpose:             trustedPurposeChatMain,
-		RunID:               runID,
-		ExecutionID:         executionIDForGenerationTest(runID),
-		CreatedAt:           time.Now().UTC(),
-	})
-	if err != nil {
-		release()
-		t.Fatalf("bind generation trigger: %v", err)
 	}
 	if err := registry.register(ctx, runID, userID, conversationPublicID, cancel); err != nil {
 		release()
@@ -71,10 +52,6 @@ func publishTestGeneration(
 	return published
 }
 
-func executionIDForGenerationTest(runID string) string {
-	return "execution-" + strings.TrimSpace(runID)
-}
-
 func claimTestGeneration(
 	t *testing.T,
 	store repository.GenerationStreamCacheRepository,
@@ -90,14 +67,6 @@ func claimTestGeneration(
 		ExecutionID:          executionID,
 		UserID:               userID,
 		ConversationPublicID: conversationPublicID,
-		TriggerContext: portllm.TrustedTriggerContext{
-			TriggererUserID:     userID,
-			ResourceOwnerUserID: userID,
-			Purpose:             trustedPurposeChatMain,
-			RunID:               runID,
-			ExecutionID:         executionID,
-			CreatedAt:           time.Now().UTC(),
-		},
 	}
 	claimed, err := store.ClaimGenerationStream(context.Background(), lease, ttl, ttl)
 	if err != nil || !claimed {
@@ -518,45 +487,6 @@ func TestGenerationStreamRegistryCancelUsesSharedMarker(t *testing.T) {
 	}
 	if registry.cancel(ctx, 8, runID) {
 		t.Fatal("expected cancel to reject non-owner")
-	}
-}
-
-func TestGenerationStreamRegistryOwnerPollsSharedCancelMarker(t *testing.T) {
-	store := cachememory.New()
-	options := generationStreamOptions{
-		Retention:    time.Minute,
-		ActiveTTL:    time.Minute,
-		LeaseTTL:     100 * time.Millisecond,
-		LeaseRefresh: 5 * time.Millisecond,
-	}
-	owner := newGenerationStreamRegistry(store, options)
-	requester := newGenerationStreamRegistry(store, options)
-	defer owner.close()
-	defer requester.close()
-
-	runID := EnsureMessageGenerationRunID("")
-	canceled := make(chan struct{}, 1)
-	ctx, cleanup := registerTestGeneration(t, owner, runID, 9, "conv_test", func() {
-		canceled <- struct{}{}
-	})
-	defer cleanup()
-
-	if !requester.cancel(context.Background(), 9, runID) {
-		t.Fatal("expected a different registry to persist the cancel marker")
-	}
-	select {
-	case <-canceled:
-	case <-time.After(time.Second):
-		t.Fatal("owner lifecycle did not observe the shared cancel marker")
-	}
-	if !owner.hasActive(ctx, runID) {
-		t.Fatal("owner must retain the lease while cancellation is still being finalized")
-	}
-	owner.mu.Lock()
-	_, stillTracked := owner.active[runID]
-	owner.mu.Unlock()
-	if !stillTracked {
-		t.Fatal("shared cancellation must not remove the owner-local execution")
 	}
 }
 
@@ -1432,59 +1362,4 @@ func (s *activeEventReaderTestStore) ListActiveGenerationStreams(_ context.Conte
 
 func (s *activeEventReaderTestStore) ReadGenerationStreamEvents(ctx context.Context, _ string, _ string, _ time.Duration, _ int64) ([]repository.GenerationStreamMessage, error) {
 	return s.read(ctx)
-}
-
-func TestGenerationStreamRegistryForcedCancelUsesSharedLease(t *testing.T) {
-	store := cachememory.New()
-	owner := newGenerationStreamRegistry(store, generationStreamOptions{
-		Retention:        time.Minute,
-		ActiveTTL:        time.Minute,
-		LeaseTTL:         time.Second,
-		LeaseRefresh:     100 * time.Millisecond,
-	})
-	requester := newGenerationStreamRegistry(store, generationStreamOptions{})
-	defer owner.close()
-	defer requester.close()
-
-	runID := EnsureMessageGenerationRunID("")
-	ctx, cleanup := registerTestGeneration(t, owner, runID, 9, "conv_test", func() {})
-	defer cleanup()
-
-	if !requester.cancelForced(context.Background(), runID) {
-		t.Fatal("expected forced cancellation to use the shared lease")
-	}
-	if !owner.isCanceled(ctx, runID) {
-		t.Fatal("expected forced cancellation to persist the shared marker")
-	}
-}
-
-func TestGenerationStreamRegistryCurrentOperationsUseSharedLease(t *testing.T) {
-	store := cachememory.New()
-	owner := newGenerationStreamRegistry(store, generationStreamOptions{})
-	requester := newGenerationStreamRegistry(store, generationStreamOptions{})
-	defer owner.close()
-	defer requester.close()
-
-	runID := EnsureMessageGenerationRunID("")
-	ctx, cleanup := registerTestGeneration(t, owner, runID, 9, "conv_test", func() {})
-	defer cleanup()
-	publishTestGeneration(t, owner, ctx, runID, map[string]any{"type": "delta", "delta": "withdrawn"})
-
-	requester.resetCurrentEvents(context.Background(), runID)
-	requester.publishCurrent(context.Background(), runID, map[string]any{"type": "moderation_blocked"})
-	records, err := store.ListGenerationStreamEvents(context.Background(), runID, 8)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(records) != 1 || streamString(mustDecodeStreamPayload(records[0].PayloadJSON)["type"]) != "moderation_blocked" {
-		t.Fatalf("expected shared reset/publish to keep only the moderation terminal event, got %#v", records)
-	}
-}
-
-func mustDecodeStreamPayload(raw string) map[string]any {
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return nil
-	}
-	return payload
 }

@@ -41,11 +41,8 @@ type modelPermissionGroupWriter interface {
 // resolveUserGroupIDs 返回用户的全部归属权限组 ID（手动权限组 + 默认权限组 + 订阅绑定权限组）。
 func (s *Service) resolveUserGroupIDs(ctx context.Context, userID uint) (map[uint]struct{}, error) {
 	groups := make(map[uint]struct{})
-	if userID == 0 {
+	if s.permGroupRepo == nil || userID == 0 {
 		return groups, nil
-	}
-	if s.permGroupRepo == nil {
-		return nil, ErrPermissionGroupRepoUnavailable
 	}
 	ids, err := s.permGroupRepo.ListUserGroupIDs(ctx, userID)
 	if err != nil {
@@ -75,11 +72,8 @@ func (s *Service) resolveUserGroupIDs(ctx context.Context, userID uint) (map[uin
 
 // isModelAccessible 判断用户是否可访问指定模型（基于权限组归属）。
 func (s *Service) isModelAccessible(ctx context.Context, platformModelID uint, userID uint) (bool, error) {
-	if userID == 0 {
+	if s.permGroupRepo == nil || userID == 0 {
 		return true, nil
-	}
-	if s.permGroupRepo == nil {
-		return false, ErrPermissionGroupRepoUnavailable
 	}
 	modelGroups, err := s.permGroupRepo.ListModelGroupIDs(ctx, platformModelID)
 	if err != nil {
@@ -154,7 +148,6 @@ func (s *Service) llmAttribution() (string, string) {
 
 // ResolvedRoute 模型请求路由结果。
 type ResolvedRoute struct {
-	UserID                          uint
 	RouteID                         uint
 	PlatformModelID                 uint
 	PlatformModelName               string
@@ -174,7 +167,6 @@ type ResolvedRoute struct {
 	ModelCapabilitiesJSON           string
 	ModelSystemPrompt               string
 	UpstreamModel                   string
-	UpstreamModelRawJSON            string
 	ReasoningContentPassback        bool
 	ReasoningPassbackRequestOptions map[string]any
 	UpstreamCbFailureThreshold      int

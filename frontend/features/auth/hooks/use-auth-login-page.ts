@@ -89,20 +89,17 @@ export function useLoginPage({ nextPath }: UseLoginPageInput) {
 
   const fallbackNextPath = normalizeAuthNextPath(settings.defaultNextPath);
   const resolvedNextPath = normalizeAuthNextPath(nextPath, fallbackNextPath);
-  const sub2AuthorityEnabled = options.sub2AuthorityEnabled === true;
-  const configuredSub2LoginPath = options.sub2LoginPath;
-  const sub2LoginPath = typeof configuredSub2LoginPath === "string" ? configuredSub2LoginPath : "/api/v1/auth/sub2/start";
-  const passwordLoginEnabled = !sub2AuthorityEnabled && (options.usernameEnabled || options.emailEnabled);
+  const passwordLoginEnabled = options.usernameEnabled || options.emailEnabled;
   const loginProviders = React.useMemo(
-    () => sub2AuthorityEnabled ? [] : options.providers.filter((provider) => provider.loginEnabled),
-    [options.providers, sub2AuthorityEnabled],
+    () => options.providers.filter((provider) => provider.loginEnabled),
+    [options.providers],
   );
   const emailRegistrationEnabled = options.emailEnabled && options.emailRegistrationEnabled;
   const emailVerificationEnabled = options.emailVerificationEnabled;
   const passwordResetEnabled = passwordLoginEnabled && options.passwordResetEnabled;
   const registerTurnstileSiteKey = options.turnstileSiteKey?.trim() ?? "";
   const registerTurnstileRequired = options.turnstileRegistrationEnabled && Boolean(registerTurnstileSiteKey);
-  const canShowRegister = !sub2AuthorityEnabled && emailRegistrationEnabled;
+  const canShowRegister = emailRegistrationEnabled;
 
   React.useEffect(() => {
     if (registerCodeCooldownSeconds === 0 && resetCodeCooldownSeconds === 0 && twoFactorEmailCodeCooldownSeconds === 0) {
@@ -234,12 +231,6 @@ export function useLoginPage({ nextPath }: UseLoginPageInput) {
     },
     [completeAuth, password, resolveErrorMessage, submitting, t, twoFactorChallengeToken, twoFactorCode, twoFactorVerificationMethod, username],
   );
-
-  const handleSub2Login = React.useCallback(() => {
-    const path = sub2LoginPath.trim() || "/api/v1/auth/sub2/start";
-    const separator = path.includes("?") ? "&" : "?";
-    window.location.href = `${resolveApiBaseURL()}${path}${separator}next=${encodeURIComponent(resolvedNextPath)}`;
-  }, [resolvedNextPath, sub2LoginPath]);
 
   const handleProviderLogin = React.useCallback(async (slug: string, intent: ProviderAuthIntent = "login") => {
     try {
@@ -465,7 +456,6 @@ export function useLoginPage({ nextPath }: UseLoginPageInput) {
     emailRegistrationEnabled,
     emailVerificationEnabled,
     handleProviderLogin,
-    handleSub2Login,
     loginProviders,
     mode,
     onLoginSubmit,
@@ -473,7 +463,6 @@ export function useLoginPage({ nextPath }: UseLoginPageInput) {
     options,
     password,
     passwordLoginEnabled,
-    sub2AuthorityEnabled,
     passwordResetEnabled,
     registerCode,
     registerCodeCooldownSeconds,

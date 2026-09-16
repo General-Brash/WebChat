@@ -74,7 +74,7 @@ func (s *Service) ListRemoteModels(ctx context.Context, upstreamID uint) (*Upstr
 			continue
 		}
 		kindsJSON := inferKindsJSON(name)
-		suggestedProtocols, _ := resolveRemoteModelProtocols(upstreamItem, item, kindsJSON)
+		suggestedProtocols, _ := resolveRouteProtocols(nil, upstreamItem.Compatible, upstreamItem.ProtocolDefaultsJSON, kindsJSON)
 		suggestedProtocol := ""
 		if len(suggestedProtocols) > 0 {
 			suggestedProtocol = suggestedProtocols[0]
@@ -86,7 +86,6 @@ func (s *Service) ListRemoteModels(ctx context.Context, upstreamID uint) (*Upstr
 			SuggestedKindsJSON:         kindsJSON,
 			SuggestedProtocol:          suggestedProtocol,
 			SuggestedProtocols:         suggestedProtocols,
-			SourceGroupIDs:             append([]int64(nil), item.SourceGroupIDs...),
 			BindingCode:                snapshot.BindingCode,
 			BoundPlatformModels:        snapshot.BoundPlatformModels,
 			UpstreamModelStatus:        snapshot.Status,
@@ -209,11 +208,10 @@ func (s *Service) reconcileRemoteModelSnapshot(
 			name := item.ID
 			remoteNameSet[name] = struct{}{}
 			kindsJSON := inferKindsJSON(name)
-			protocols, resolveErr := resolveRemoteModelProtocols(upstreamItem, item, kindsJSON)
+			protocol, resolveErr := resolveRouteProtocol("", upstreamItem.Compatible, upstreamItem.ProtocolDefaultsJSON, kindsJSON)
 			if resolveErr != nil {
 				return resolveErr
 			}
-			protocol := protocols[0]
 
 			if existing, managed := managedByName[name]; managed {
 				desired := syncedUpstreamModel(upstreamItem, item, existing.BindingCode, &now, protocol, kindsJSON)
@@ -304,23 +302,11 @@ func normalizeRemoteModelItems(items []llm.ModelItem) []llm.ModelItem {
 		if name == "" {
 			continue
 		}
-		item.ID = name
-		item.OwnedBy = strings.TrimSpace(item.OwnedBy)
-		item.DisplayName = strings.TrimSpace(item.DisplayName)
-		item.Protocols = normalizeRemoteModelProtocols(item.Protocols)
-		item.SourceGroupIDs = normalizeRemoteModelGroupIDs(item.SourceGroupIDs)
-		if existing, exists := unique[name]; exists {
-			if existing.OwnedBy == "" {
-				existing.OwnedBy = item.OwnedBy
-			}
-			if existing.DisplayName == "" {
-				existing.DisplayName = item.DisplayName
-			}
-			existing.Protocols = appendUniqueStrings(existing.Protocols, item.Protocols...)
-			existing.SourceGroupIDs = appendUniqueInt64s(existing.SourceGroupIDs, item.SourceGroupIDs...)
-			unique[name] = existing
+		if _, exists := unique[name]; exists {
 			continue
 		}
+		item.ID = name
+		item.OwnedBy = strings.TrimSpace(item.OwnedBy)
 		unique[name] = item
 	}
 	result := make([]llm.ModelItem, 0, len(unique))
@@ -331,66 +317,6 @@ func normalizeRemoteModelItems(items []llm.ModelItem) []llm.ModelItem {
 		return strings.Compare(a.ID, b.ID)
 	})
 	return result
-}
-
-func normalizeRemoteModelProtocols(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	result := make([]string, 0, len(values))
-	for _, raw := range values {
-		value := strings.TrimSpace(strings.ToLower(raw))
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	slices.Sort(result)
-	return result
-}
-
-func normalizeRemoteModelGroupIDs(values []int64) []int64 {
-	result := appendUniqueInt64s(nil, values...)
-	slices.Sort(result)
-	return result
-}
-
-func appendUniqueStrings(dst []string, values ...string) []string {
-	seen := make(map[string]struct{}, len(dst)+len(values))
-	for _, value := range dst {
-		seen[value] = struct{}{}
-	}
-	for _, value := range values {
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		dst = append(dst, value)
-	}
-	return dst
-}
-
-func appendUniqueInt64s(dst []int64, values ...int64) []int64 {
-	seen := make(map[int64]struct{}, len(dst)+len(values))
-	for _, value := range dst {
-		seen[value] = struct{}{}
-	}
-	for _, value := range values {
-		if value <= 0 {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		dst = append(dst, value)
-	}
-	return dst
 }
 
 func remoteModelsSnapshotID(items []llm.ModelItem) string {
@@ -438,11 +364,10 @@ func buildUpstreamModelSyncPlan(
 			continue
 		}
 		kindsJSON := inferKindsJSON(name)
-		protocols, err := resolveRemoteModelProtocols(upstream, item, kindsJSON)
+		protocol, err := resolveRouteProtocol("", upstream.Compatible, upstream.ProtocolDefaultsJSON, kindsJSON)
 		if err != nil {
 			return UpstreamModelSyncPlanView{}, err
 		}
-		protocol := protocols[0]
 		desired := syncedUpstreamModel(upstream, item, existing.BindingCode, nil, protocol, kindsJSON)
 		if upstreamModelMetadataChanged(existing, desired) {
 			plan.UpdatedModels = append(plan.UpdatedModels, name)
@@ -468,16 +393,6 @@ func upstreamModelMetadataChanged(existing domainchannel.UpstreamModel, desired 
 		strings.TrimSpace(existing.SuggestedProtocol) != strings.TrimSpace(desired.SuggestedProtocol) ||
 		strings.TrimSpace(existing.KindsJSON) != strings.TrimSpace(desired.KindsJSON) ||
 		strings.TrimSpace(existing.RawJSON) != strings.TrimSpace(desired.RawJSON)
-}
-
-// resolveRemoteModelProtocols prefers the provider/authority catalog's
-// protocol metadata. Name-based inference remains only a compatibility
-// fallback for providers whose /models response has no protocol field.
-func resolveRemoteModelProtocols(upstream *domainchannel.Upstream, item llm.ModelItem, kindsJSON string) ([]string, error) {
-	if len(item.Protocols) > 0 {
-		return resolveRouteProtocols(item.Protocols, upstream.Compatible, upstream.ProtocolDefaultsJSON, kindsJSON)
-	}
-	return resolveRouteProtocols(nil, upstream.Compatible, upstream.ProtocolDefaultsJSON, kindsJSON)
 }
 
 // ImportUpstreamModels 批量把上游真实模型绑定到平台模型。
@@ -605,9 +520,6 @@ func mergeImportedModelPermissionGroupIDs(ctx context.Context, writer modelPermi
 // ---------------------------------------------------------------------------
 
 func (s *Service) fetchRemoteModels(ctx context.Context, up *domainchannel.Upstream) ([]llm.ModelItem, error) {
-	if up.Kind == "sub2" && s.llmClient != nil {
-		return s.llmClient.ListModels(ctx, llm.RouteConfig{UpstreamID: up.ID})
-	}
 	if s.llmClient == nil {
 		return nil, ErrRemoteModelsUnavailable
 	}
@@ -625,7 +537,6 @@ func (s *Service) fetchRemoteModels(ctx context.Context, up *domainchannel.Upstr
 	}
 	attributionReferer, attributionTitle := s.llmAttribution()
 	items, err := s.llmClient.ListModels(ctx, llm.RouteConfig{
-		UpstreamID:         up.ID,
 		Protocol:           protocol,
 		BaseURL:            up.BaseURL,
 		APIKey:             apiKey,
@@ -656,12 +567,9 @@ func syncedUpstreamModel(
 	kindsJSON string,
 ) *domainchannel.UpstreamModel {
 	name := strings.TrimSpace(item.ID)
-	rawJSON, _ := json.Marshal(map[string]any{
-		"id":               name,
-		"owned_by":         strings.TrimSpace(item.OwnedBy),
-		"display_name":     strings.TrimSpace(item.DisplayName),
-		"protocols":        append([]string(nil), item.Protocols...),
-		"source_group_ids": append([]int64(nil), item.SourceGroupIDs...),
+	rawJSON, _ := json.Marshal(map[string]string{
+		"id":       name,
+		"owned_by": strings.TrimSpace(item.OwnedBy),
 	})
 	vendor := normalizeModelVendor(item.OwnedBy, name, upstream.Name, upstream.BaseURL)
 	return &domainchannel.UpstreamModel{

@@ -1,7 +1,7 @@
-import { Activity, Cable, Check, ChevronDownIcon, CloudDownload, Plus, RefreshCw, Search, Tags, ToggleLeft, Trash2 } from "lucide-react";
-import { useTranslations } from "next-intl";
 import * as React from "react";
 import { toast } from "sonner";
+import { Activity, Cable, Check, ChevronDownIcon, CloudDownload, Plus, RefreshCw, Search, Tags, ToggleLeft, Trash2 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -12,7 +12,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -41,6 +40,11 @@ import {
 import { SpinnerLabel } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Table,
   TableBody,
   TableCell,
@@ -51,12 +55,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { TablePagination, TableToolbar } from "@/components/ui/table-tools";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { useVirtualTableRows, VirtualTablePaddingRow } from "@/components/ui/virtual-table";
+import { AdminBulkConfirmDialog } from "@/features/admin/components/bulk-confirm-dialog";
+import { Badge } from "@/components/ui/badge";
+import { useLocalizedErrorMessage } from "@/i18n/use-localized-error";
+import { resolveAccessToken } from "@/shared/auth/resolve-access-token";
+import { ApiError } from "@/shared/api/http-client";
+import { useDialogSnapshot } from "@/shared/hooks/use-dialog-snapshot";
+import {
+  mergeBatchResultData,
+  runBulkActionInChunks,
+} from "@/shared/lib/bulk-action";
 import {
   batchDeleteAdminLLMUpstreamModels,
   deleteAdminLLMUpstreamModel,
@@ -64,6 +73,7 @@ import {
   testAdminLLMUpstreamModelRoute,
   upsertAdminLLMUpstreamModel,
 } from "@/features/admin/api";
+import { cn } from "@/lib/utils";
 import type {
   AdminLLMAdapter,
   AdminLLMModelProbeResult,
@@ -71,41 +81,31 @@ import type {
   AdminLLMUpstreamView,
   UpsertAdminLLMUpstreamModelRequest,
 } from "@/features/admin/api/llm.types";
-import { AdminBulkConfirmDialog } from "@/features/admin/components/bulk-confirm-dialog";
-import { PermissionGroupSelector } from "@/features/admin/components/sections/groups/permission-group-selector";
 import { ModelProbeDialog } from "@/features/admin/components/sections/models/models-probe-dialog";
-import {
-  isUpstreamModelSyncAbort,
-  UpstreamModelBindingsApplyError,
-  useUpstreamModelSync,
-} from "@/features/admin/hooks/use-upstream-model-sync";
-import {
-  buildRowDrafts,
-  createDraftPlatformModelNameMap,
-  DEFAULT_NEW_BINDING,
-  displayToKindsJson,
-  type NewBindingFormState,
-  type RowDraft,
-  summarizeBatchDeleteResult,
-  summarizeImportResult,
-  validateRowDrafts,
-} from "@/features/admin/model/upstreams-models";
-import { MODEL_KIND_OPTIONS, PAGE_SIZE_DEFAULT } from "@/features/admin/types/llm";
 import {
   PROTOCOL_OPTIONS,
   resolveKindsDisplayForProtocols,
   resolveNextRouteProtocolSelection,
   sortProtocolsForDisplay,
 } from "@/features/admin/utils/llm-display";
-import { useLocalizedErrorMessage } from "@/i18n/use-localized-error";
-import { cn } from "@/lib/utils";
-import { ApiError } from "@/shared/api/http-client";
-import { resolveAccessToken } from "@/shared/auth/resolve-access-token";
-import { useDialogSnapshot } from "@/shared/hooks/use-dialog-snapshot";
+import { MODEL_KIND_OPTIONS, PAGE_SIZE_DEFAULT } from "@/features/admin/types/llm";
 import {
-  mergeBatchResultData,
-  runBulkActionInChunks,
-} from "@/shared/lib/bulk-action";
+  buildRowDrafts,
+  createDraftPlatformModelNameMap,
+  DEFAULT_NEW_BINDING,
+  displayToKindsJson,
+  summarizeBatchDeleteResult,
+  summarizeImportResult,
+  validateRowDrafts,
+  type NewBindingFormState,
+  type RowDraft,
+} from "@/features/admin/model/upstreams-models";
+import { PermissionGroupSelector } from "@/features/admin/components/sections/groups/permission-group-selector";
+import {
+  isUpstreamModelSyncAbort,
+  UpstreamModelBindingsApplyError,
+  useUpstreamModelSync,
+} from "@/features/admin/hooks/use-upstream-model-sync";
 
 function KindsDropdown({
   value,
@@ -487,10 +487,6 @@ function dedupeRemoteModels(items: AdminLLMRemoteModelItem[]): AdminLLMRemoteMod
         ...(existing.suggestedProtocols ?? []),
         ...(item.suggestedProtocols ?? []),
       ])),
-      sourceGroupIDs: Array.from(new Set([
-        ...(existing.sourceGroupIDs ?? []),
-        ...(item.sourceGroupIDs ?? []),
-      ])),
       bindingCode: existing.bindingCode || item.bindingCode,
       boundPlatformModels: Array.from(new Set([...existing.boundPlatformModels, ...item.boundPlatformModels])),
       upstreamModelStatus: existing.upstreamModelStatus || item.upstreamModelStatus,
@@ -843,13 +839,12 @@ function RemoteModelsDialog({
                     </TableHead>
                     <TableHead className="w-[36%] whitespace-nowrap">{t("modelsDialog.upstreamModelName")}</TableHead>
                     <TableHead>{t("modelsDialog.platformModelName")}</TableHead>
-                    <TableHead className="w-[24%] whitespace-nowrap">{t("modelsDialog.protocol")}</TableHead>
                     <TableHead className="w-20 text-center">{t("fields.status")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {!loading && filteredRemoteItems.length === 0 ? (
-                      <TableEmptyRow colSpan={5}>
+                    <TableEmptyRow colSpan={4}>
                       {hasQuery ? t("modelsDialog.noMatchedModels") : t("modelsDialog.noSyncableModels")}
                     </TableEmptyRow>
                   ) : null}
@@ -879,19 +874,6 @@ function RemoteModelsDialog({
                             value={draftPlatformModelNames.get(item.upstreamModelName) ?? ""}
                             onChange={(e) => setDraftPlatformModelName(item.upstreamModelName, e.target.value)}
                           />
-                        </div>
-                      </TableCell>
-                      <TableCell className="py-1.5">
-                        <div className="flex min-h-7 flex-wrap items-center gap-1">
-                          {(item.suggestedProtocols ?? []).length > 0 ? (
-                            item.suggestedProtocols.map((protocol) => (
-                              <Badge key={protocol} variant="outline" className="font-mono text-[10px]">
-                                {protocol}
-                              </Badge>
-                            ))
-                          ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
-                          )}
                         </div>
                       </TableCell>
                       <TableCell className="w-20 py-1.5 text-center">

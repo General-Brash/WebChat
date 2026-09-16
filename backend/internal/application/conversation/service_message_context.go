@@ -524,8 +524,7 @@ func shouldFallbackToNonStreaming(err error) bool {
 }
 
 type generationAttemptObservation struct {
-	emitted                bool
-	providerEffectObserved bool
+	emitted bool
 }
 
 func (o *generationAttemptObservation) markObservable() {
@@ -534,14 +533,8 @@ func (o *generationAttemptObservation) markObservable() {
 	}
 }
 
-func (o *generationAttemptObservation) markProviderEffect() {
-	if o != nil {
-		o.providerEffectObserved = true
-	}
-}
-
 func (o *generationAttemptObservation) canRetry(err error, classify func(error) bool) bool {
-	return o != nil && err != nil && !o.emitted && !o.providerEffectObserved && classify != nil && classify(err)
+	return o != nil && err != nil && !o.emitted && classify != nil && classify(err)
 }
 
 func isStreamUnsupportedError(err *llm.UpstreamError) bool {
@@ -1248,7 +1241,7 @@ func (s *Service) selectRelevantUserMemories(ctx context.Context, userID uint, q
 	}
 	searchCtx, cancel := context.WithTimeout(ctx, semanticRecallDeadline)
 	defer cancel()
-	embeddings, embeddingSignature, err := s.embeddingSvc.EmbedTextsWithSignatureFor(searchCtx, []string{query}, "memory.recall")
+	embeddings, embeddingSignature, err := s.embeddingSvc.EmbedTextsWithSignature(searchCtx, []string{query})
 	if err != nil || len(embeddings) == 0 {
 		return fallback
 	}

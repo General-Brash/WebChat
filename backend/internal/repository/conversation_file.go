@@ -6,7 +6,6 @@ import (
 
 	domainconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	domainuser "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/user"
-	portllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 )
 
 // ListFileObjectsInput 定义用户文件列表的分页、筛选与排序条件。
@@ -108,7 +107,7 @@ type FileProcessingRepository interface {
 	UpdateClaimedFileObjectProcessingState(ctx context.Context, item *domainconversation.FileObjectProcessing, attemptID string) (bool, error)
 	GetFileObjectProcessingByObjectID(ctx context.Context, fileObjID uint) (*domainconversation.FileObjectProcessing, error)
 	CloneFileObjectProcessingState(ctx context.Context, sourceFileObjID uint, targetFileObjID uint, userID uint) error
-	TryClaimFileObjectProcessing(ctx context.Context, userID uint, fileID string, allowRecovery bool, extractorVersion string, attemptID string, trigger ...portllm.TrustedTriggerContext) (bool, error)
+	TryClaimFileObjectProcessing(ctx context.Context, userID uint, fileID string, allowRecovery bool, extractorVersion string, attemptID string) (bool, error)
 	ResetFileObjectProcessingForRetry(ctx context.Context, userID uint, fileID string, attemptID string) (bool, error)
 }
 

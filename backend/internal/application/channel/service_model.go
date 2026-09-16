@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	appbilling "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/billing"
 	domainchannel "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/channel"
-	sub2port "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/sub2"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/apperr"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/channelconfig"
@@ -141,11 +139,8 @@ func (s *Service) listActiveModelViews(ctx context.Context) ([]ModelView, error)
 // 绑定到权限组的模型仅对归属权限组成员可见。
 // 用户归属权限组 = 手动权限组 + 默认权限组（is_default） + 订阅套餐绑定权限组。
 func (s *Service) filterModelsByPermission(ctx context.Context, userID uint, views []ModelView) ([]ModelView, error) {
-	if userID == 0 {
+	if s.permGroupRepo == nil || userID == 0 {
 		return views, nil
-	}
-	if s.permGroupRepo == nil {
-		return nil, ErrPermissionGroupRepoUnavailable
 	}
 	modelsWithGroups, err := s.permGroupRepo.ListModelsWithGroupAccess(ctx)
 	if err != nil {
@@ -897,51 +892,17 @@ func (s *Service) applyModelSourceCircuitStatus(ctx context.Context, view *Model
 
 // ListLLMSettings 列出 LLM 全局设置。
 func (s *Service) ListLLMSettings(ctx context.Context) ([]domainchannel.LLMSetting, error) {
-	items, err := s.repo.ListLLMSettings(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		if item.Key == sub2port.GlobalGroupPrioritySettingKey {
-			return items, nil
-		}
-	}
-	// Keep the existing generic settings endpoint usable before the first
-	// explicit save. This virtual empty value is visibly unconfigured and is
-	// rejected by publication; it never acts as an allow-all fallback.
-	return append(items, domainchannel.LLMSetting{
-		Key:         sub2port.GlobalGroupPrioritySettingKey,
-		Value:       "[]",
-		Description: sub2port.GlobalGroupPrioritySettingDescription,
-	}), nil
+	return s.repo.ListLLMSettings(ctx)
 }
 
 // UpdateLLMSetting 更新全局 LLM 设置项。
 func (s *Service) UpdateLLMSetting(ctx context.Context, key string, value string) (*domainchannel.LLMSetting, error) {
-	key = strings.TrimSpace(key)
-	isGlobalGroupPriority := key == sub2port.GlobalGroupPrioritySettingKey
 	current, err := s.repo.GetLLMSetting(ctx, key)
 	if err != nil {
-		if !isGlobalGroupPriority || !errors.Is(err, repository.ErrLLMSettingNotFound) {
-			return nil, err
-		}
-		current = &domainchannel.LLMSetting{
-			Key:         key,
-			Description: sub2port.GlobalGroupPrioritySettingDescription,
-		}
+		return nil, err
 	}
 	normalizedValue := strings.TrimSpace(value)
-	if isGlobalGroupPriority {
-		ids, parseErr := sub2port.ParseGlobalGroupPriority(normalizedValue)
-		if parseErr != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalidSub2GroupPriority, parseErr)
-		}
-		encoded, marshalErr := json.Marshal(ids)
-		if marshalErr != nil {
-			return nil, marshalErr
-		}
-		normalizedValue = string(encoded)
-	} else if err := validateOptionalJSON(normalizedValue); err != nil {
+	if err := validateOptionalJSON(normalizedValue); err != nil {
 		return nil, ErrInvalidJSONConfig
 	}
 	isBreakerDefaults := key == channelconfig.BreakerDefaultsKey

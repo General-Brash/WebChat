@@ -112,12 +112,11 @@ type BatchDeleteResultView struct {
 
 // BatchDeleteData 表示兑换码批量删除汇总。
 type BatchDeleteData struct {
-	Total            int
-	SuccessCount     int
-	NotFoundCount    int
-	FailedCount      int
-	AuthorityRequired bool
-	Results          []BatchDeleteResultView
+	Total         int
+	SuccessCount  int
+	NotFoundCount int
+	FailedCount   int
+	Results       []BatchDeleteResultView
 }
 
 // RedemptionRecordView 表示管理员兑换记录视图，带兑换码与余额流水上下文。
@@ -247,9 +246,6 @@ func (s *Service) RevealRedemptionCode(ctx context.Context, id uint) (*Redemptio
 
 // CreateRedemptionCodes 创建一个或多个兑换码。
 func (s *Service) CreateRedemptionCodes(ctx context.Context, actorUserID uint, input RedemptionCodeInput) ([]RedemptionCodeView, error) {
-	if err := s.requireLocalBilling(); err != nil {
-		return nil, err
-	}
 	if actorUserID == 0 {
 		return nil, repository.ErrInvalidInput
 	}
@@ -309,9 +305,6 @@ func (s *Service) CreateRedemptionCodes(ctx context.Context, actorUserID uint, i
 
 // UpdateRedemptionCode 更新兑换码管理字段，不允许修改奖励本身。
 func (s *Service) UpdateRedemptionCode(ctx context.Context, id uint, input RedemptionCodeUpdateInput) (*RedemptionCodeView, error) {
-	if err := s.requireLocalBilling(); err != nil {
-		return nil, err
-	}
 	if id == 0 {
 		return nil, repository.ErrInvalidInput
 	}
@@ -353,9 +346,6 @@ func (s *Service) UpdateRedemptionCode(ctx context.Context, id uint, input Redem
 
 // DeleteRedemptionCode 软删除兑换码，保留历史兑换记录。
 func (s *Service) DeleteRedemptionCode(ctx context.Context, id uint) error {
-	if err := s.requireLocalBilling(); err != nil {
-		return err
-	}
 	if id == 0 {
 		return repository.ErrInvalidInput
 	}
@@ -374,10 +364,6 @@ func (s *Service) BatchDeleteRedemptionCodes(ctx context.Context, ids []uint) *B
 		case err == nil:
 			result.SuccessCount++
 			result.Results = append(result.Results, BatchDeleteResultView{ID: id, Status: BatchDeleteStatusDeleted})
-		case errors.Is(err, ErrSub2AuthorityRequired):
-			result.AuthorityRequired = true
-			result.FailedCount++
-			result.Results = append(result.Results, BatchDeleteResultView{ID: id, Status: BatchDeleteStatusFailed, Error: apperr.MessageOr(err, "billing authority required")})
 		case errors.Is(err, ErrRedemptionCodeUnavailable):
 			result.NotFoundCount++
 			result.Results = append(result.Results, BatchDeleteResultView{ID: id, Status: BatchDeleteStatusNotFound})
@@ -391,12 +377,6 @@ func (s *Service) BatchDeleteRedemptionCodes(ctx context.Context, ids []uint) *B
 
 // RedeemCode 兑换当前用户提交的兑换码。
 func (s *Service) RedeemCode(ctx context.Context, userID uint, code string) (*RedemptionApplyView, error) {
-	if err := s.checkExternalIdentity(ctx, userID); err != nil {
-		return nil, err
-	}
-	if err := s.requireLocalBilling(); err != nil {
-		return nil, err
-	}
 	if userID == 0 {
 		return nil, repository.ErrInvalidInput
 	}

@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	portllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 )
 
@@ -184,42 +183,6 @@ func TestGenerationStreamRejectsReuseUntilOwnershipExpires(t *testing.T) {
 	}
 }
 
-func TestGenerationStreamOldLeaseCannotPublishOverNewTrustedSignature(t *testing.T) {
-	cache := New()
-	ctx := context.Background()
-	actorA := portllm.TrustedTriggerContext{
-		TriggererUserID:     11,
-		ResourceOwnerUserID: 0,
-		Purpose:             "chat.main",
-		RunID:               "run_signature_guard",
-		ExecutionID:         "exec_a",
-		CreatedAt:           time.Date(2026, time.September, 16, 9, 0, 0, 0, time.UTC),
-	}
-	actorB := actorA
-	actorB.TriggererUserID = 12
-	actorB.ExecutionID = "exec_b"
-	first := repository.GenerationStreamLease{
-		RunID:                actorA.RunID,
-		ExecutionID:          actorA.ExecutionID,
-		UserID:               7,
-		ConversationPublicID: "conv_signature_guard",
-		TriggerContext:       actorA,
-	}
-	second := first
-	second.ExecutionID = actorB.ExecutionID
-	second.TriggerContext = actorB
-	if claimed, err := cache.ClaimGenerationStream(ctx, first, 10*time.Millisecond, 40*time.Millisecond); err != nil || !claimed {
-		t.Fatalf("first claim=%v err=%v, want true nil", claimed, err)
-	}
-	time.Sleep(50 * time.Millisecond)
-	if claimed, err := cache.ClaimGenerationStream(ctx, second, time.Minute, time.Minute); err != nil || claimed {
-		t.Fatalf("mismatched new signature claim=%v err=%v, want false nil", claimed, err)
-	}
-	if _, accepted, err := cache.AppendGenerationStreamEvent(ctx, first, repository.GenerationStreamAppend{PayloadJSON: `{"type":"stale"}`}, 8, time.Minute); err != nil || accepted {
-		t.Fatalf("old lease append accepted=%v err=%v, want false nil", accepted, err)
-	}
-}
-
 func TestGenerationStreamCompletesAfterActiveLeaseExpires(t *testing.T) {
 	cache := New()
 	ctx := context.Background()
@@ -242,14 +205,6 @@ func testGenerationStreamLease(runID string, executionID string) repository.Gene
 		ExecutionID:          executionID,
 		UserID:               7,
 		ConversationPublicID: "conv_test",
-		TriggerContext: portllm.TrustedTriggerContext{
-			TriggererUserID:     7,
-			ResourceOwnerUserID: 7,
-			Purpose:             "chat.main",
-			RunID:               runID,
-			ExecutionID:         executionID,
-			CreatedAt:           time.Now().UTC(),
-		},
 	}
 }
 

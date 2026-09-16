@@ -8,7 +8,6 @@ import (
 
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/channel"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
-	"github.com/google/uuid"
 )
 
 type temporaryGenerationResult struct {
@@ -42,25 +41,6 @@ func (s *Service) runTemporaryGeneration(ctx context.Context, input temporaryGen
 	startedAt := input.StartedAt
 	onDelta := input.OnDelta
 	cfg := s.cfg.Snapshot()
-	runID := strings.TrimSpace(request.ClientRunID)
-	if runID == "" {
-		return temporaryGenerationResult{}, ErrInvalidMessageContent
-	}
-	request.ClientRunID = runID
-	subject := llm.ExecutionSubjectFromContext(ctx)
-	if !subject.HasTriggerer() {
-		return temporaryGenerationResult{}, llm.ErrTrustedTriggerRequired
-	}
-	if subject.RunID != "" && subject.RunID != runID {
-		return temporaryGenerationResult{}, llm.ErrTrustedTriggerMismatch
-	}
-	if subject.ResourceOwnerUserID != 0 && subject.ResourceOwnerUserID != request.UserID {
-		return temporaryGenerationResult{}, llm.ErrTrustedTriggerMismatch
-	}
-	if subject.Purpose != "" && subject.Purpose != trustedPurposeChatMain {
-		return temporaryGenerationResult{}, llm.ErrTrustedTriggerMismatch
-	}
-	trustedContext := ctx
 	totalUsage := llm.Usage{}
 	totalServerToolUsage := map[string]int64(nil)
 	var totalMCPToolUsage []MCPToolUsageItem
@@ -80,27 +60,11 @@ func (s *Service) runTemporaryGeneration(ctx context.Context, input temporaryGen
 			applyOpenAIResponsesInstructions(route, routeConfig.Endpoint, &currentInput)
 		}
 		currentInput = enforceTemporaryGenerateInput(currentInput)
-		if prepareInput {
-			// Every tool follow-up is a distinct real execution. A retry of the
-			// same concrete call keeps its ID; a new tool round gets a new one.
-			currentInput.ExecutionID = uuid.NewString()
-		}
-		providerCtx, _, trustErr := prepareTrustedProviderExecution(
-			trustedContext,
-			&currentInput,
-			request.UserID,
-			trustedPurposeChatMain,
-			runID,
-		)
-		if trustErr != nil {
-			return nil, trustErr
-		}
-		trustedContext = providerCtx
 
 		var callText strings.Builder
 		var observedUsage llm.Usage
 		llmCallCount++
-		output, err := s.llmClient.GenerateStream(providerCtx, routeConfig, currentInput, func(event llm.GenerateStreamEvent) error {
+		output, err := s.llmClient.GenerateStream(ctx, routeConfig, currentInput, func(event llm.GenerateStreamEvent) error {
 			if event.Usage != (llm.Usage{}) {
 				observedUsage = event.Usage
 				if emitErr := emitLLMUsageEvent(request.OnEvent, addLLMUsage(totalUsage, observedUsage)); emitErr != nil {
@@ -197,12 +161,12 @@ func (s *Service) runTemporaryGeneration(ctx context.Context, input temporaryGen
 			route.ModelCapabilitiesJSON,
 			cfg.ContextWindowFallbackTokens,
 		)
-		toolResult := s.executeAssistantToolCalls(trustedContext, executeAssistantToolCallsInput{
+		toolResult := s.executeAssistantToolCalls(ctx, executeAssistantToolCallsInput{
 			UserID:            request.UserID,
 			ConversationID:    0,
 			MessageID:         0,
 			RequestID:         request.RequestID,
-			RunID:             runID,
+			RunID:             request.ClientRunID,
 			ToolCalls:         pending,
 			ToolCallLimit:     remainingToolCalls,
 			TraceRecorder:     traceRecorder,

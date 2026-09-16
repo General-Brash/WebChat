@@ -104,8 +104,6 @@ var (
 	ErrNoActiveKey = apperr.New("llm.no_active_api_key", "no active api key")
 	// ErrLLMSettingNotFound LLM 全局设置不存在。
 	ErrLLMSettingNotFound = repository.ErrLLMSettingNotFound
-	// ErrInvalidSub2GroupPriority Sub2 全局分组优先级必须由管理员显式配置。
-	ErrInvalidSub2GroupPriority = apperr.New("llm.invalid_sub2_group_priority", "Sub2 global group priority must be an explicit non-empty ordered group list")
 )
 
 // RoutesRateLimitedError 携带全部候选路由恢复前的最短等待时间。

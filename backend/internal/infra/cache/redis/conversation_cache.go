@@ -10,7 +10,6 @@ import (
 	"time"
 
 	domainconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
-	portllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/go-redis/redis/v8"
 )
@@ -56,14 +55,10 @@ local current_execution = redis.call("GET", KEYS[1])
 if current_execution then
 	if current_execution == ARGV[1]
 		and redis.call("GET", KEYS[2]) == ARGV[2]
-		and redis.call("GET", KEYS[3]) == ARGV[3]
-		and (redis.call("GET", KEYS[11]) or "") == ARGV[9] then
+		and redis.call("GET", KEYS[3]) == ARGV[3] then
 		redis.call("PEXPIRE", KEYS[1], ARGV[4])
 		redis.call("PEXPIRE", KEYS[2], ARGV[5])
 		redis.call("PEXPIRE", KEYS[3], ARGV[5])
-		if ARGV[9] ~= "" then
-			redis.call("PEXPIRE", KEYS[11], ARGV[5])
-		end
 		redis.call("ZADD", KEYS[5], ARGV[6], ARGV[7])
 		redis.call("PEXPIRE", KEYS[5], ARGV[8])
 		return 1
@@ -81,10 +76,7 @@ end
 redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[4])
 redis.call("SET", KEYS[2], ARGV[2], "PX", ARGV[5])
 redis.call("SET", KEYS[3], ARGV[3], "PX", ARGV[5])
-redis.call("DEL", KEYS[4], KEYS[6], KEYS[7], KEYS[8], KEYS[9], KEYS[10], KEYS[11])
-if ARGV[9] ~= "" then
-	redis.call("SET", KEYS[11], ARGV[9], "PX", ARGV[5])
-end
+redis.call("DEL", KEYS[4], KEYS[6], KEYS[7], KEYS[8], KEYS[9], KEYS[10])
 redis.call("ZADD", KEYS[5], ARGV[6], ARGV[7])
 redis.call("PEXPIRE", KEYS[5], ARGV[8])
 return 1
@@ -92,8 +84,7 @@ return 1
 
 // appendGenerationStreamEventScript 原子维护执行权隔离、事件序号、有界回放和恢复快照。
 var appendGenerationStreamEventScript = redis.NewScript(`
-if redis.call("GET", KEYS[1]) ~= ARGV[10]
-	or (redis.call("GET", KEYS[8]) or "") ~= ARGV[11] then
+if redis.call("GET", KEYS[1]) ~= ARGV[10] then
 	return {"0"}
 end
 local events_missing = redis.call("EXISTS", KEYS[3]) == 0
@@ -195,36 +186,6 @@ local pending = redis.call("XPENDING", KEYS[1], ARGV[1], ARGV[3], ARGV[3], 1)
 if #pending == 0 or pending[1][2] ~= ARGV[2] then
 	return 0
 end
-local entries = redis.call("XRANGE", KEYS[1], ARGV[3], ARGV[3], "COUNT", 1)
-if #entries == 0 then
-	return 0
-end
-local fields = entries[1][2]
-local function value(name)
-	for index = 1, #fields, 2 do
-		if fields[index] == name then
-			return fields[index + 1]
-		end
-	end
-	return ""
-end
-local function trim_host(value)
-	return string.gsub(value, "/+$", "")
-end
-if value("user_id") ~= ARGV[4]
-	or value("file_id") ~= ARGV[5]
-	or value("kind") ~= ARGV[6]
-	or value("embedding_signature") ~= ARGV[7]
-	or trim_host(value("embedding_host")) ~= trim_host(ARGV[8])
-	or value("triggerer_user_id") ~= ARGV[9]
-	or value("resource_owner_user_id") ~= ARGV[10]
-	or value("purpose") ~= ARGV[11]
-	or value("run_id") ~= ARGV[12]
-	or value("execution_id") ~= ARGV[13]
-	or value("parent_execution_id") ~= ARGV[14]
-	or value("trigger_created_at") ~= ARGV[15] then
-	return 0
-end
 redis.call("XCLAIM", KEYS[1], ARGV[1], ARGV[2], 0, ARGV[3], "JUSTID")
 return 1
 `)
@@ -232,36 +193,6 @@ return 1
 var settleFileProcessingMessageScript = redis.NewScript(`
 local pending = redis.call("XPENDING", KEYS[1], ARGV[1], ARGV[3], ARGV[3], 1)
 if #pending == 0 or pending[1][2] ~= ARGV[2] then
-	return 0
-end
-local entries = redis.call("XRANGE", KEYS[1], ARGV[3], ARGV[3], "COUNT", 1)
-if #entries == 0 then
-	return 0
-end
-local fields = entries[1][2]
-local function value(name)
-	for index = 1, #fields, 2 do
-		if fields[index] == name then
-			return fields[index + 1]
-		end
-	end
-	return ""
-end
-local function trim_host(value)
-	return string.gsub(value, "/+$", "")
-end
-if value("user_id") ~= ARGV[4]
-	or value("file_id") ~= ARGV[5]
-	or value("kind") ~= ARGV[6]
-	or value("embedding_signature") ~= ARGV[7]
-	or trim_host(value("embedding_host")) ~= trim_host(ARGV[8])
-	or value("triggerer_user_id") ~= ARGV[9]
-	or value("resource_owner_user_id") ~= ARGV[10]
-	or value("purpose") ~= ARGV[11]
-	or value("run_id") ~= ARGV[12]
-	or value("execution_id") ~= ARGV[13]
-	or value("parent_execution_id") ~= ARGV[14]
-	or value("trigger_created_at") ~= ARGV[15] then
 	return 0
 end
 redis.call("XACK", KEYS[1], ARGV[1], ARGV[3])
@@ -274,36 +205,6 @@ local pending = redis.call("XPENDING", KEYS[1], ARGV[1], ARGV[3], ARGV[3], 1)
 if #pending == 0 or pending[1][2] ~= ARGV[2] then
 	return 0
 end
-local entries = redis.call("XRANGE", KEYS[1], ARGV[3], ARGV[3], "COUNT", 1)
-if #entries == 0 then
-	return 0
-end
-local fields = entries[1][2]
-local function value(name)
-	for index = 1, #fields, 2 do
-		if fields[index] == name then
-			return fields[index + 1]
-		end
-	end
-	return ""
-end
-local function trim_host(value)
-	return string.gsub(value, "/+$", "")
-end
-if value("user_id") ~= ARGV[4]
-	or value("file_id") ~= ARGV[5]
-	or value("kind") ~= ARGV[8]
-	or trim_host(value("embedding_host")) ~= trim_host(ARGV[10])
-	or value("embedding_signature") ~= ARGV[9]
-	or value("triggerer_user_id") ~= ARGV[11]
-	or value("resource_owner_user_id") ~= ARGV[12]
-	or value("purpose") ~= ARGV[13]
-	or value("run_id") ~= ARGV[14]
-	or value("execution_id") ~= ARGV[15]
-	or value("parent_execution_id") ~= ARGV[16]
-	or value("trigger_created_at") ~= ARGV[17] then
-	return 0
-end
 redis.call(
 	"XADD", KEYS[1], "*",
 	"user_id", ARGV[4],
@@ -312,14 +213,7 @@ redis.call(
 	"last_error", ARGV[7],
 	"kind", ARGV[8],
 	"embedding_signature", ARGV[9],
-	"embedding_host", ARGV[10],
-	"triggerer_user_id", ARGV[11],
-	"resource_owner_user_id", ARGV[12],
-	"purpose", ARGV[13],
-	"run_id", ARGV[14],
-	"execution_id", ARGV[15],
-	"parent_execution_id", ARGV[16],
-	"trigger_created_at", ARGV[17]
+	"embedding_host", ARGV[10]
 )
 redis.call("XACK", KEYS[1], ARGV[1], ARGV[3])
 redis.call("XDEL", KEYS[1], ARGV[3])
@@ -331,36 +225,6 @@ local pending = redis.call("XPENDING", KEYS[1], ARGV[1], ARGV[3], ARGV[3], 1)
 if #pending == 0 or pending[1][2] ~= ARGV[2] then
 	return 0
 end
-local entries = redis.call("XRANGE", KEYS[1], ARGV[3], ARGV[3], "COUNT", 1)
-if #entries == 0 then
-	return 0
-end
-local fields = entries[1][2]
-local function value(name)
-	for index = 1, #fields, 2 do
-		if fields[index] == name then
-			return fields[index + 1]
-		end
-	end
-	return ""
-end
-local function trim_host(value)
-	return string.gsub(value, "/+$", "")
-end
-if value("user_id") ~= ARGV[4]
-	or value("file_id") ~= ARGV[5]
-	or value("kind") ~= ARGV[8]
-	or trim_host(value("embedding_host")) ~= trim_host(ARGV[10])
-	or value("embedding_signature") ~= ARGV[9]
-	or value("triggerer_user_id") ~= ARGV[12]
-	or value("resource_owner_user_id") ~= ARGV[13]
-	or value("purpose") ~= ARGV[14]
-	or value("run_id") ~= ARGV[15]
-	or value("execution_id") ~= ARGV[16]
-	or value("parent_execution_id") ~= ARGV[17]
-	or value("trigger_created_at") ~= ARGV[18] then
-	return 0
-end
 redis.call(
 	"XADD", KEYS[2], "MAXLEN", ARGV[11], "*",
 	"user_id", ARGV[4],
@@ -369,14 +233,7 @@ redis.call(
 	"last_error", ARGV[7],
 	"kind", ARGV[8],
 	"embedding_signature", ARGV[9],
-	"embedding_host", ARGV[10],
-	"triggerer_user_id", ARGV[12],
-	"resource_owner_user_id", ARGV[13],
-	"purpose", ARGV[14],
-	"run_id", ARGV[15],
-	"execution_id", ARGV[16],
-	"parent_execution_id", ARGV[17],
-	"trigger_created_at", ARGV[18]
+	"embedding_host", ARGV[10]
 )
 redis.call("XACK", KEYS[1], ARGV[1], ARGV[3])
 redis.call("XDEL", KEYS[1], ARGV[3])
@@ -386,18 +243,14 @@ return 1
 var renewGenerationStreamLeaseScript = redis.NewScript(`
 if redis.call("GET", KEYS[1]) ~= ARGV[1]
 	or redis.call("GET", KEYS[2]) ~= ARGV[2]
-	or redis.call("GET", KEYS[3]) ~= ARGV[3]
-	or (redis.call("GET", KEYS[5]) or "") ~= ARGV[4] then
+	or redis.call("GET", KEYS[3]) ~= ARGV[3] then
 	return 0
 end
-	redis.call("PEXPIRE", KEYS[1], ARGV[5])
-	redis.call("PEXPIRE", KEYS[2], ARGV[6])
-	redis.call("PEXPIRE", KEYS[3], ARGV[6])
-	if ARGV[4] ~= "" then
-		redis.call("PEXPIRE", KEYS[5], ARGV[6])
-	end
-	redis.call("ZADD", KEYS[4], ARGV[7], ARGV[8])
-	redis.call("PEXPIRE", KEYS[4], ARGV[9])
+redis.call("PEXPIRE", KEYS[1], ARGV[4])
+redis.call("PEXPIRE", KEYS[2], ARGV[5])
+redis.call("PEXPIRE", KEYS[3], ARGV[5])
+redis.call("ZADD", KEYS[4], ARGV[6], ARGV[7])
+redis.call("PEXPIRE", KEYS[4], ARGV[8])
 return 1
 `)
 
@@ -413,16 +266,13 @@ var completeGenerationStreamScript = redis.NewScript(`
 if redis.call("GET", KEYS[2]) ~= ARGV[2] or redis.call("GET", KEYS[4]) ~= ARGV[4] then
 	return 0
 end
-if (redis.call("GET", KEYS[12]) or "") ~= ARGV[6] then
-	return 0
-end
 local current_execution = redis.call("GET", KEYS[1])
 if current_execution and current_execution ~= ARGV[1] then
 	return 0
 end
 redis.call("DEL", KEYS[1])
 redis.call("ZREM", KEYS[3], ARGV[3])
-	for index = 2, 12 do
+	for index = 2, 11 do
 	if index ~= 3 then
 		redis.call("PEXPIRE", KEYS[index], ARGV[5])
 	end
@@ -431,18 +281,16 @@ return 1
 `)
 
 var abandonGenerationStreamScript = redis.NewScript(`
-if redis.call("GET", KEYS[1]) ~= ARGV[1] or redis.call("GET", KEYS[2]) ~= ARGV[2]
-	 or (redis.call("GET", KEYS[12]) or "") ~= ARGV[4] then
+if redis.call("GET", KEYS[1]) ~= ARGV[1] or redis.call("GET", KEYS[2]) ~= ARGV[2] then
 	return 0
 end
 redis.call("ZREM", KEYS[3], ARGV[3])
-redis.call("DEL", KEYS[1], KEYS[2], KEYS[4], KEYS[5], KEYS[6], KEYS[7], KEYS[8], KEYS[9], KEYS[10], KEYS[11], KEYS[12])
+redis.call("DEL", KEYS[1], KEYS[2], KEYS[4], KEYS[5], KEYS[6], KEYS[7], KEYS[8], KEYS[9], KEYS[10], KEYS[11])
 return 1
 `)
 
 var resetGenerationStreamEventsScript = redis.NewScript(`
-if redis.call("GET", KEYS[1]) ~= ARGV[1]
-	or (redis.call("GET", KEYS[7]) or "") ~= ARGV[2] then
+if redis.call("GET", KEYS[1]) ~= ARGV[1] then
 	return 0
 end
 redis.call("DEL", KEYS[2], KEYS[3], KEYS[4], KEYS[5], KEYS[6])
@@ -478,7 +326,7 @@ func (c *conversationCache) InitFileProcessingStream(ctx context.Context) error 
 }
 
 // EnqueueFileProcessing 将文件处理任务推入 Stream 队列。
-func (c *conversationCache) EnqueueFileProcessing(ctx context.Context, userID uint, fileID string, retry int, lastError string, trigger ...portllm.TrustedTriggerContext) error {
+func (c *conversationCache) EnqueueFileProcessing(ctx context.Context, userID uint, fileID string, retry int, lastError string) error {
 	if c.client == nil {
 		return nil
 	}
@@ -487,7 +335,6 @@ func (c *conversationCache) EnqueueFileProcessing(ctx context.Context, userID ui
 		"file_id": fileID,
 		"retry":   retry,
 	}
-	addTrustedTriggerValues(values, firstTrustedTriggerContext(trigger))
 	if strings.TrimSpace(lastError) != "" {
 		values["last_error"] = truncateStr(lastError, 255)
 	}
@@ -505,7 +352,6 @@ func (c *conversationCache) EnqueueFileEmbedding(
 	fileID string,
 	embeddingSignature string,
 	embeddingHost string,
-	trigger ...portllm.TrustedTriggerContext,
 ) error {
 	fileID = strings.TrimSpace(fileID)
 	embeddingSignature = strings.TrimSpace(embeddingSignature)
@@ -516,18 +362,16 @@ func (c *conversationCache) EnqueueFileEmbedding(
 	if c.client == nil {
 		return nil
 	}
-	values := map[string]any{
-		"user_id":             userID,
-		"file_id":             fileID,
-		"retry":               0,
-		"kind":                repository.FileProcessingKindEmbedding,
-		"embedding_signature": embeddingSignature,
-		"embedding_host":      embeddingHost,
-	}
-	addTrustedTriggerValues(values, firstTrustedTriggerContext(trigger))
 	_, err := c.client.XAdd(ctx, &redis.XAddArgs{
 		Stream: fileEmbeddingStreamName,
-		Values: values,
+		Values: map[string]any{
+			"user_id":             userID,
+			"file_id":             fileID,
+			"retry":               0,
+			"kind":                repository.FileProcessingKindEmbedding,
+			"embedding_signature": embeddingSignature,
+			"embedding_host":      embeddingHost,
+		},
 	}).Result()
 	return err
 }
@@ -666,7 +510,10 @@ func parseFileProcessingMessage(msg redis.XMessage) (repository.FileProcessingMe
 		return repository.FileProcessingMessage{}, fmt.Errorf("invalid processing kind %q", kind)
 	}
 	userID, err := strconv.ParseUint(strings.TrimSpace(getStringVal(msg.Values["user_id"])), 10, strconv.IntSize)
-	if err != nil {
+	if err != nil || (userID == 0 && kind != repository.FileProcessingKindEmbedding) {
+		if err == nil {
+			err = errors.New("must be greater than zero")
+		}
 		return repository.FileProcessingMessage{}, fmt.Errorf("invalid user_id: %w", err)
 	}
 
@@ -687,10 +534,6 @@ func parseFileProcessingMessage(msg redis.XMessage) (repository.FileProcessingMe
 	if kind == repository.FileProcessingKindEmbedding && (embeddingSignature == "" || embeddingHost == "") {
 		return repository.FileProcessingMessage{}, errors.New("invalid embedding queue metadata")
 	}
-	trigger, err := parseTrustedTriggerContext(msg.Values)
-	if err != nil {
-		return repository.FileProcessingMessage{}, err
-	}
 
 	return repository.FileProcessingMessage{
 		ID:                 msg.ID,
@@ -701,7 +544,6 @@ func parseFileProcessingMessage(msg redis.XMessage) (repository.FileProcessingMe
 		Kind:               kind,
 		EmbeddingSignature: embeddingSignature,
 		EmbeddingHost:      embeddingHost,
-		TriggerContext:     trigger,
 	}, nil
 }
 
@@ -721,21 +563,14 @@ func (c *conversationCache) deadLetterInvalidFileProcessingMessage(
 		queue.group,
 		consumerName,
 		message.ID,
-		getOptionalStringVal(message.Values, "user_id"),
-		getOptionalStringVal(message.Values, "file_id"),
-		getOptionalStringVal(message.Values, "retry"),
+		getStringVal(message.Values["user_id"]),
+		getStringVal(message.Values["file_id"]),
+		getStringVal(message.Values["retry"]),
 		truncateStr(lastError, 255),
 		getOptionalStringVal(message.Values, "kind"),
 		getOptionalStringVal(message.Values, "embedding_signature"),
 		getOptionalStringVal(message.Values, "embedding_host"),
 		fileProcessingDLQMaxLen,
-		getOptionalStringVal(message.Values, "triggerer_user_id"),
-		getOptionalStringVal(message.Values, "resource_owner_user_id"),
-		getOptionalStringVal(message.Values, "purpose"),
-		getOptionalStringVal(message.Values, "run_id"),
-		getOptionalStringVal(message.Values, "execution_id"),
-		getOptionalStringVal(message.Values, "parent_execution_id"),
-		getOptionalStringVal(message.Values, "trigger_created_at"),
 	).Result())
 }
 
@@ -752,18 +587,6 @@ func (c *conversationCache) RenewFileProcessingMessageLease(ctx context.Context,
 		queue.group,
 		consumerName,
 		message.ID,
-		message.UserID,
-		message.FileID,
-		message.Kind,
-		message.EmbeddingSignature,
-		message.EmbeddingHost,
-		message.TriggerContext.TriggererUserID,
-		message.TriggerContext.ResourceOwnerUserID,
-		message.TriggerContext.Purpose,
-		message.TriggerContext.RunID,
-		message.TriggerContext.ExecutionID,
-		message.TriggerContext.ParentExecutionID,
-		formatTrustedTriggerCreatedAt(message.TriggerContext),
 	).Result())
 }
 
@@ -779,18 +602,6 @@ func (c *conversationCache) SettleFileProcessingMessage(ctx context.Context, con
 		queue.group,
 		consumerName,
 		message.ID,
-		message.UserID,
-		message.FileID,
-		message.Kind,
-		message.EmbeddingSignature,
-		message.EmbeddingHost,
-		message.TriggerContext.TriggererUserID,
-		message.TriggerContext.ResourceOwnerUserID,
-		message.TriggerContext.Purpose,
-		message.TriggerContext.RunID,
-		message.TriggerContext.ExecutionID,
-		message.TriggerContext.ParentExecutionID,
-		formatTrustedTriggerCreatedAt(message.TriggerContext),
 	).Result())
 }
 
@@ -819,13 +630,6 @@ func (c *conversationCache) RequeueFileProcessingMessage(
 		message.Kind,
 		message.EmbeddingSignature,
 		message.EmbeddingHost,
-		message.TriggerContext.TriggererUserID,
-		message.TriggerContext.ResourceOwnerUserID,
-		message.TriggerContext.Purpose,
-		message.TriggerContext.RunID,
-		message.TriggerContext.ExecutionID,
-		message.TriggerContext.ParentExecutionID,
-		formatTrustedTriggerCreatedAt(message.TriggerContext),
 	).Result())
 }
 
@@ -854,13 +658,6 @@ func (c *conversationCache) DeadLetterFileProcessingMessage(
 		message.EmbeddingSignature,
 		message.EmbeddingHost,
 		fileProcessingDLQMaxLen,
-		message.TriggerContext.TriggererUserID,
-		message.TriggerContext.ResourceOwnerUserID,
-		message.TriggerContext.Purpose,
-		message.TriggerContext.RunID,
-		message.TriggerContext.ExecutionID,
-		message.TriggerContext.ParentExecutionID,
-		formatTrustedTriggerCreatedAt(message.TriggerContext),
 	).Result())
 }
 
@@ -970,19 +767,7 @@ func (c *conversationCache) ClaimGenerationStream(
 	lease.RunID = strings.TrimSpace(lease.RunID)
 	lease.ExecutionID = strings.TrimSpace(lease.ExecutionID)
 	lease.ConversationPublicID = strings.TrimSpace(lease.ConversationPublicID)
-	lease.TriggerContext = repository.NormalizeTrustedTriggerContext(lease.TriggerContext)
-	if lease.RunID == "" ||
-		lease.ExecutionID == "" ||
-		lease.UserID == 0 ||
-		lease.ConversationPublicID == "" ||
-		!lease.TriggerContext.HasTriggerer() ||
-		strings.TrimSpace(lease.TriggerContext.Purpose) == "" ||
-		lease.TriggerContext.RunID != lease.RunID ||
-		lease.TriggerContext.ExecutionID != lease.ExecutionID ||
-		lease.TriggerContext.CreatedAt.IsZero() {
-		return false, nil
-	}
-	if lease.TriggerContext.ResourceOwnerUserID != 0 && lease.TriggerContext.ResourceOwnerUserID != lease.UserID {
+	if lease.RunID == "" || lease.ExecutionID == "" || lease.UserID == 0 || lease.ConversationPublicID == "" {
 		return false, nil
 	}
 	if leaseTTL <= 0 {
@@ -1002,7 +787,6 @@ func (c *conversationCache) ClaimGenerationStream(
 		generationStreamTextSeqKey(lease.RunID),
 		generationStreamUpstreamThinkContentKey(lease.RunID),
 		generationStreamUpstreamThinkMetaKey(lease.RunID),
-		generationStreamTriggerKey(lease.RunID),
 	},
 		lease.ExecutionID,
 		strconv.FormatUint(uint64(lease.UserID), 10),
@@ -1012,7 +796,6 @@ func (c *conversationCache) ClaimGenerationStream(
 		time.Now().Add(leaseTTL).UnixMilli(),
 		lease.RunID,
 		generationStreamIndexTTL.Milliseconds(),
-		marshalTrustedTriggerContext(lease.TriggerContext),
 	).Int()
 	if err != nil {
 		return false, err
@@ -1039,62 +822,6 @@ func (c *conversationCache) GetGenerationStreamOwner(ctx context.Context, runID 
 	return uint(value), true, nil
 }
 
-// GetGenerationStreamLease returns the active shared lease, including the
-// immutable attribution envelope needed by cross-instance callers.
-func (c *conversationCache) GetGenerationStreamLease(ctx context.Context, runID string) (repository.GenerationStreamLease, bool, error) {
-	if c == nil || c.client == nil {
-		return repository.GenerationStreamLease{}, false, nil
-	}
-	runID = strings.TrimSpace(runID)
-	if runID == "" {
-		return repository.GenerationStreamLease{}, false, nil
-	}
-	values, err := c.client.MGet(ctx,
-		generationStreamActiveKey(runID),
-		generationStreamOwnerKey(runID),
-		generationStreamConversationKey(runID),
-		generationStreamTriggerKey(runID),
-	).Result()
-	if err != nil {
-		return repository.GenerationStreamLease{}, false, err
-	}
-	valueAt := func(index int) string {
-		if index < 0 || index >= len(values) || values[index] == nil {
-			return ""
-		}
-		return strings.TrimSpace(getStringVal(values[index]))
-	}
-	if valueAt(0) == "" {
-		return repository.GenerationStreamLease{}, false, nil
-	}
-	executionID := valueAt(0)
-	ownerValue := valueAt(1)
-	conversationPublicID := valueAt(2)
-	triggerJSON := valueAt(3)
-	if ownerValue == "" || conversationPublicID == "" || triggerJSON == "" {
-		return repository.GenerationStreamLease{}, false, nil
-	}
-	owner, err := strconv.ParseUint(ownerValue, 10, strconv.IntSize)
-	if err != nil || owner == 0 {
-		return repository.GenerationStreamLease{}, false, nil
-	}
-	var trigger portllm.TrustedTriggerContext
-	if err := json.Unmarshal([]byte(triggerJSON), &trigger); err != nil {
-		return repository.GenerationStreamLease{}, false, nil
-	}
-	trigger = repository.NormalizeTrustedTriggerContext(trigger)
-	if !trigger.HasTriggerer() || strings.TrimSpace(trigger.Purpose) == "" || trigger.CreatedAt.IsZero() || trigger.RunID != runID || trigger.ExecutionID != executionID {
-		return repository.GenerationStreamLease{}, false, nil
-	}
-	return repository.GenerationStreamLease{
-		RunID:                runID,
-		ExecutionID:          executionID,
-		UserID:               uint(owner),
-		ConversationPublicID: conversationPublicID,
-		TriggerContext:       trigger,
-	}, true, nil
-}
-
 // RenewGenerationStreamLease 仅为当前执行续租。
 func (c *conversationCache) RenewGenerationStreamLease(
 	ctx context.Context,
@@ -1108,11 +835,7 @@ func (c *conversationCache) RenewGenerationStreamLease(
 	lease.RunID = strings.TrimSpace(lease.RunID)
 	lease.ExecutionID = strings.TrimSpace(lease.ExecutionID)
 	lease.ConversationPublicID = strings.TrimSpace(lease.ConversationPublicID)
-	lease.TriggerContext = repository.NormalizeTrustedTriggerContext(lease.TriggerContext)
-	if lease.RunID == "" || lease.ExecutionID == "" || lease.UserID == 0 || lease.ConversationPublicID == "" || leaseTTL <= 0 || !lease.TriggerContext.HasTriggerer() {
-		return false, nil
-	}
-	if lease.TriggerContext.RunID != lease.RunID || lease.TriggerContext.ExecutionID != lease.ExecutionID || strings.TrimSpace(lease.TriggerContext.Purpose) == "" || lease.TriggerContext.CreatedAt.IsZero() {
+	if lease.RunID == "" || lease.ExecutionID == "" || lease.UserID == 0 || lease.ConversationPublicID == "" || leaseTTL <= 0 {
 		return false, nil
 	}
 	if ownershipTTL < leaseTTL {
@@ -1124,12 +847,10 @@ func (c *conversationCache) RenewGenerationStreamLease(
 		generationStreamOwnerKey(lease.RunID),
 		generationStreamConversationKey(lease.RunID),
 		generationStreamActiveIndexKey(lease.UserID),
-		generationStreamTriggerKey(lease.RunID),
 	},
 		lease.ExecutionID,
 		owner,
 		lease.ConversationPublicID,
-		marshalTrustedTriggerContext(lease.TriggerContext),
 		leaseTTL.Milliseconds(),
 		ownershipTTL.Milliseconds(),
 		time.Now().Add(leaseTTL).UnixMilli(),
@@ -1149,11 +870,7 @@ func (c *conversationCache) CompleteGenerationStream(ctx context.Context, lease 
 	}
 	lease.RunID = strings.TrimSpace(lease.RunID)
 	lease.ExecutionID = strings.TrimSpace(lease.ExecutionID)
-	lease.TriggerContext = repository.NormalizeTrustedTriggerContext(lease.TriggerContext)
-	if lease.RunID == "" || lease.ExecutionID == "" || lease.UserID == 0 || retention <= 0 || !lease.TriggerContext.HasTriggerer() {
-		return false, nil
-	}
-	if lease.TriggerContext.RunID != lease.RunID || lease.TriggerContext.ExecutionID != lease.ExecutionID || strings.TrimSpace(lease.TriggerContext.Purpose) == "" || lease.TriggerContext.CreatedAt.IsZero() {
+	if lease.RunID == "" || lease.ExecutionID == "" || lease.UserID == 0 || retention <= 0 {
 		return false, nil
 	}
 	owner := strconv.FormatUint(uint64(lease.UserID), 10)
@@ -1169,8 +886,7 @@ func (c *conversationCache) CompleteGenerationStream(ctx context.Context, lease 
 		generationStreamTextSeqKey(lease.RunID),
 		generationStreamUpstreamThinkContentKey(lease.RunID),
 		generationStreamUpstreamThinkMetaKey(lease.RunID),
-		generationStreamTriggerKey(lease.RunID),
-	}, lease.ExecutionID, owner, lease.RunID, lease.ConversationPublicID, retention.Milliseconds(), marshalTrustedTriggerContext(lease.TriggerContext)).Int()
+	}, lease.ExecutionID, owner, lease.RunID, lease.ConversationPublicID, retention.Milliseconds()).Int()
 	if err != nil {
 		return false, err
 	}
@@ -1184,11 +900,7 @@ func (c *conversationCache) AbandonGenerationStream(ctx context.Context, lease r
 	}
 	lease.RunID = strings.TrimSpace(lease.RunID)
 	lease.ExecutionID = strings.TrimSpace(lease.ExecutionID)
-	lease.TriggerContext = repository.NormalizeTrustedTriggerContext(lease.TriggerContext)
-	if lease.RunID == "" || lease.ExecutionID == "" || lease.UserID == 0 || !lease.TriggerContext.HasTriggerer() {
-		return false, nil
-	}
-	if lease.TriggerContext.RunID != lease.RunID || lease.TriggerContext.ExecutionID != lease.ExecutionID || strings.TrimSpace(lease.TriggerContext.Purpose) == "" || lease.TriggerContext.CreatedAt.IsZero() {
+	if lease.RunID == "" || lease.ExecutionID == "" || lease.UserID == 0 {
 		return false, nil
 	}
 	owner := strconv.FormatUint(uint64(lease.UserID), 10)
@@ -1204,8 +916,7 @@ func (c *conversationCache) AbandonGenerationStream(ctx context.Context, lease r
 		generationStreamTextSeqKey(lease.RunID),
 		generationStreamUpstreamThinkContentKey(lease.RunID),
 		generationStreamUpstreamThinkMetaKey(lease.RunID),
-		generationStreamTriggerKey(lease.RunID),
-	}, lease.ExecutionID, owner, lease.RunID, marshalTrustedTriggerContext(lease.TriggerContext)).Int()
+	}, lease.ExecutionID, owner, lease.RunID).Int()
 	if err != nil {
 		return false, err
 	}
@@ -1331,11 +1042,7 @@ func (c *conversationCache) AppendGenerationStreamEvent(
 	}
 	lease.RunID = strings.TrimSpace(lease.RunID)
 	lease.ExecutionID = strings.TrimSpace(lease.ExecutionID)
-	lease.TriggerContext = repository.NormalizeTrustedTriggerContext(lease.TriggerContext)
-	if lease.RunID == "" || lease.ExecutionID == "" || !lease.TriggerContext.HasTriggerer() {
-		return repository.GenerationStreamMessage{}, false, nil
-	}
-	if lease.TriggerContext.RunID != lease.RunID || lease.TriggerContext.ExecutionID != lease.ExecutionID || strings.TrimSpace(lease.TriggerContext.Purpose) == "" || lease.TriggerContext.CreatedAt.IsZero() {
+	if lease.RunID == "" || lease.ExecutionID == "" {
 		return repository.GenerationStreamMessage{}, false, nil
 	}
 	if maxEvents <= 0 {
@@ -1371,7 +1078,6 @@ func (c *conversationCache) AppendGenerationStreamEvent(
 			generationStreamTextSeqKey(lease.RunID),
 			generationStreamUpstreamThinkContentKey(lease.RunID),
 			generationStreamUpstreamThinkMetaKey(lease.RunID),
-			generationStreamTriggerKey(lease.RunID),
 		},
 		input.PayloadJSON,
 		maxEvents,
@@ -1383,7 +1089,6 @@ func (c *conversationCache) AppendGenerationStreamEvent(
 		upstreamThinkRoundID,
 		upstreamThinkMetadata,
 		lease.ExecutionID,
-		marshalTrustedTriggerContext(lease.TriggerContext),
 	).Result()
 	if err != nil {
 		return repository.GenerationStreamMessage{}, false, err
@@ -1569,11 +1274,7 @@ func (c *conversationCache) ResetGenerationStreamEvents(ctx context.Context, lea
 	}
 	lease.RunID = strings.TrimSpace(lease.RunID)
 	lease.ExecutionID = strings.TrimSpace(lease.ExecutionID)
-	lease.TriggerContext = repository.NormalizeTrustedTriggerContext(lease.TriggerContext)
-	if lease.RunID == "" || lease.ExecutionID == "" || !lease.TriggerContext.HasTriggerer() {
-		return false, nil
-	}
-	if lease.TriggerContext.RunID != lease.RunID || lease.TriggerContext.ExecutionID != lease.ExecutionID || strings.TrimSpace(lease.TriggerContext.Purpose) == "" || lease.TriggerContext.CreatedAt.IsZero() {
+	if lease.RunID == "" || lease.ExecutionID == "" {
 		return false, nil
 	}
 	// Keep seq key so subsequent appends stay monotonic for reconnect cursors.
@@ -1584,8 +1285,7 @@ func (c *conversationCache) ResetGenerationStreamEvents(ctx context.Context, lea
 		generationStreamTextSeqKey(lease.RunID),
 		generationStreamUpstreamThinkContentKey(lease.RunID),
 		generationStreamUpstreamThinkMetaKey(lease.RunID),
-		generationStreamTriggerKey(lease.RunID),
-	}, lease.ExecutionID, marshalTrustedTriggerContext(lease.TriggerContext)).Int()
+	}, lease.ExecutionID).Int()
 	if err != nil {
 		return false, err
 	}
@@ -1656,22 +1356,6 @@ func generationStreamCancelKey(runID string) string {
 	return generationStreamKeyPrefix + strings.TrimSpace(runID) + ":cancel"
 }
 
-func generationStreamTriggerKey(runID string) string {
-	return generationStreamKeyPrefix + strings.TrimSpace(runID) + ":trigger_context"
-}
-
-func marshalTrustedTriggerContext(trigger portllm.TrustedTriggerContext) string {
-	trigger = repository.NormalizeTrustedTriggerContext(trigger)
-	if !repository.HasTrustedTriggerMetadata(trigger) {
-		return ""
-	}
-	data, err := json.Marshal(trigger)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
 func truncateStr(s string, maxLen int) string {
 	v := strings.TrimSpace(s)
 	if maxLen <= 0 || len([]rune(v)) <= maxLen {
@@ -1697,77 +1381,6 @@ func getOptionalStringVal(values map[string]any, key string) string {
 		return ""
 	}
 	return getStringVal(raw)
-}
-
-func firstTrustedTriggerContext(items []portllm.TrustedTriggerContext) portllm.TrustedTriggerContext {
-	if len(items) == 0 {
-		return portllm.TrustedTriggerContext{}
-	}
-	return repository.NormalizeTrustedTriggerContext(items[0])
-}
-
-func addTrustedTriggerValues(values map[string]any, trigger portllm.TrustedTriggerContext) {
-	trigger = repository.NormalizeTrustedTriggerContext(trigger)
-	if !repository.HasTrustedTriggerMetadata(trigger) {
-		return
-	}
-	values["triggerer_user_id"] = trigger.TriggererUserID
-	values["resource_owner_user_id"] = trigger.ResourceOwnerUserID
-	values["purpose"] = trigger.Purpose
-	values["run_id"] = trigger.RunID
-	values["execution_id"] = trigger.ExecutionID
-	values["parent_execution_id"] = trigger.ParentExecutionID
-	if !trigger.CreatedAt.IsZero() {
-		values["trigger_created_at"] = formatTrustedTriggerCreatedAt(trigger)
-	}
-}
-
-func parseTrustedTriggerContext(values map[string]any) (portllm.TrustedTriggerContext, error) {
-	triggerer, err := parseOptionalUint(values, "triggerer_user_id")
-	if err != nil {
-		return portllm.TrustedTriggerContext{}, err
-	}
-	owner, err := parseOptionalUint(values, "resource_owner_user_id")
-	if err != nil {
-		return portllm.TrustedTriggerContext{}, err
-	}
-	createdAt := time.Time{}
-	rawCreatedAt := strings.TrimSpace(getOptionalStringVal(values, "trigger_created_at"))
-	if rawCreatedAt != "" {
-		createdAt, err = time.Parse(time.RFC3339Nano, rawCreatedAt)
-		if err != nil {
-			return portllm.TrustedTriggerContext{}, fmt.Errorf("invalid trigger_created_at: %w", err)
-		}
-	}
-	return repository.NormalizeTrustedTriggerContext(portllm.TrustedTriggerContext{
-		TriggererUserID:     triggerer,
-		ResourceOwnerUserID: owner,
-		Purpose:             getOptionalStringVal(values, "purpose"),
-		RunID:               getOptionalStringVal(values, "run_id"),
-		ExecutionID:         getOptionalStringVal(values, "execution_id"),
-		ParentExecutionID:   getOptionalStringVal(values, "parent_execution_id"),
-		CreatedAt:           createdAt,
-	}), nil
-}
-
-func parseOptionalUint(values map[string]any, key string) (uint, error) {
-	raw := strings.TrimSpace(getOptionalStringVal(values, key))
-	if raw == "" {
-		return 0, nil
-	}
-	value, err := strconv.ParseUint(raw, 10, strconv.IntSize)
-	if err != nil {
-		return 0, fmt.Errorf("invalid %s: %w", key, err)
-	}
-	return uint(value), nil
-}
-
-func formatTrustedTriggerCreatedAt(trigger portllm.TrustedTriggerContext) string {
-	trigger = repository.NormalizeTrustedTriggerContext(trigger)
-	if trigger.CreatedAt.IsZero() {
-		return ""
-	}
-	return trigger.CreatedAt.Format(time.RFC3339Nano)
 }
 
 func getInt64Val(raw any) int64 {

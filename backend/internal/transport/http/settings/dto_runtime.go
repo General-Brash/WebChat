@@ -17,29 +17,17 @@ type ServiceRuntimeResponse struct {
 }
 
 type EmbeddingIndexStatusResponse struct {
-	ModelSignature     string `json:"modelSignature"`
-	ReadyCount         int64  `json:"readyCount"`
-	StaleCount         int64  `json:"staleCount"`
-	PendingCount       int64  `json:"pendingCount"`
-	FailedCount        int64  `json:"failedCount"`
-	NeedsReindex       bool   `json:"needsReindex"`
-	ReindexJobID       string `json:"reindexJobId,omitempty"`
-	ReindexStatus      string `json:"reindexStatus"`
-	ReindexPayerUserID uint   `json:"reindexPayerUserId,omitempty"`
-	ReindexTotal       int64  `json:"reindexTotal"`
-	ReindexSubmitted   int64  `json:"reindexSubmitted"`
-	ReindexCompleted   int64  `json:"reindexCompleted"`
-	ReindexFailed      int64  `json:"reindexFailed"`
-	ReindexCursor      uint   `json:"reindexCursor"`
-	ReindexLastError   string `json:"reindexLastError,omitempty"`
+	ModelSignature string `json:"modelSignature"`
+	ReadyCount     int64  `json:"readyCount"`
+	StaleCount     int64  `json:"staleCount"`
+	PendingCount   int64  `json:"pendingCount"`
+	FailedCount    int64  `json:"failedCount"`
+	NeedsReindex   bool   `json:"needsReindex"`
 }
 
 type EmbeddingReindexResponse struct {
-	Submitted     int    `json:"submitted"`
-	JobID         string `json:"jobId,omitempty"`
-	Status        string `json:"status"`
-	PayerUserID   uint   `json:"payerUserId,omitempty"`
-	Message       string `json:"message"`
+	Submitted int    `json:"submitted"`
+	Message   string `json:"message"`
 }
 
 func toServiceRuntimeResponse(view appruntime.ServiceRuntimeView) ServiceRuntimeResponse {
@@ -57,11 +45,12 @@ func toServiceRuntimeResponse(view appruntime.ServiceRuntimeView) ServiceRuntime
 
 func toEmbeddingIndexStatusResponse(status appembedding.EmbeddingIndexStatus) EmbeddingIndexStatusResponse {
 	return EmbeddingIndexStatusResponse{
-		ModelSignature: status.ModelSignature, ReadyCount: status.ReadyCount, StaleCount: status.StaleCount,
-		PendingCount: status.PendingCount, FailedCount: status.FailedCount, NeedsReindex: status.NeedsReindex,
-		ReindexJobID: status.ReindexJobID, ReindexStatus: status.ReindexStatus, ReindexPayerUserID: status.ReindexPayerUserID,
-		ReindexTotal: status.ReindexTotalFiles, ReindexSubmitted: status.ReindexSubmitted, ReindexCompleted: status.ReindexCompleted,
-		ReindexFailed: status.ReindexFailed, ReindexCursor: status.ReindexCursor, ReindexLastError: status.ReindexLastError,
+		ModelSignature: status.ModelSignature,
+		ReadyCount:     status.ReadyCount,
+		StaleCount:     status.StaleCount,
+		PendingCount:   status.PendingCount,
+		FailedCount:    status.FailedCount,
+		NeedsReindex:   status.NeedsReindex,
 	}
 }
 

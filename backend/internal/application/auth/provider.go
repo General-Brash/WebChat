@@ -28,9 +28,6 @@ import (
 
 // LoginOptions describes the authentication methods enabled for the login UI.
 type LoginOptions struct {
-	Sub2AuthorityEnabled         bool
-	Sub2LoginPath                string
-	SSOOnly                      bool
 	UsernameEnabled              bool
 	EmailEnabled                 bool
 	EmailRegistrationEnabled     bool
@@ -193,14 +190,6 @@ type providerOAuthState struct {
 // GetLoginOptions returns the authentication methods and providers available to the client.
 func (s *Service) GetLoginOptions(ctx context.Context) (*LoginOptions, error) {
 	cfg := s.cfg.Snapshot()
-	if cfg.UsesSub2Authority() {
-		return &LoginOptions{
-			Sub2AuthorityEnabled: true,
-			Sub2LoginPath:        "/api/v1/auth/sub2/start",
-			SSOOnly:              true,
-			Providers:            []IdentityProviderView{},
-		}, nil
-	}
 	providerViews := []IdentityProviderView{}
 	if cfg.ThirdPartyLoginEnabled {
 		providers, err := s.repo.ListIdentityProviders(ctx, false)
@@ -379,9 +368,6 @@ func (s *Service) ReorderIdentityProviders(ctx context.Context, publicIDs []stri
 
 // CompleteProviderLogin exchanges a provider callback for an application session.
 func (s *Service) CompleteProviderLogin(ctx context.Context, input CompleteProviderLoginInput) (*LoginResult, error) {
-	if s.sub2Enabled() {
-		return nil, ErrSub2AuthorityRequired
-	}
 	if !s.cfg.Snapshot().ThirdPartyLoginEnabled {
 		return nil, ErrThirdPartyLoginDisabled
 	}
@@ -528,9 +514,6 @@ func (s *Service) completeProviderLoginForUser(
 
 // CompleteProviderBind links a provider identity to the authenticated user.
 func (s *Service) CompleteProviderBind(ctx context.Context, input CompleteProviderBindInput) (*UserIdentityView, error) {
-	if s.sub2Enabled() {
-		return nil, ErrSub2AuthorityRequired
-	}
 	if input.UserID == 0 {
 		return nil, ErrUnauthorized
 	}
@@ -927,9 +910,6 @@ func buildProviderAuthURL(provider domainuser.IdentityProvider, authURL string, 
 
 // BuildProviderAuthURL builds a validated provider authorization URL for the web flow.
 func (s *Service) BuildProviderAuthURL(ctx context.Context, slug string, redirectURI string, nextPath string, codeChallenge string, intent string) (string, error) {
-	if s.sub2Enabled() {
-		return "", ErrSub2AuthorityRequired
-	}
 	if !s.cfg.Snapshot().ThirdPartyLoginEnabled {
 		return "", ErrThirdPartyLoginDisabled
 	}

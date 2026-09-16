@@ -41,40 +41,6 @@ func TestLocalAPIKeyCounterIsScopedToService(t *testing.T) {
 	}
 }
 
-func TestResolveRouteFailsClosedWhenPermissionRepositoryIsMissing(t *testing.T) {
-	repo := &routeResolutionRepositoryStub{
-		model: domainchannel.PlatformModel{
-			ID:                1,
-			PlatformModelName: "restricted-model",
-			AccessScope:       ModelAccessScopePublic,
-		},
-		routes: []repository.ChannelUpstreamRouteRow{{
-			RouteID:           1,
-			UpstreamModelID:   2,
-			UpstreamID:        3,
-			PlatformModelID:   1,
-			PlatformModelName: "restricted-model",
-			ModelKindsJSON:    `["chat"]`,
-			Protocol:          llm.AdapterOpenAIChatCompletions,
-			BaseURL:           "https://provider.example.com/v1",
-			BindingCode:       "binding",
-			UpstreamModelName: "provider-model",
-			Weight:            1,
-			RoutePriority:     1,
-		}},
-	}
-	service := newTestService(config.Config{DataEncryptionKey: "test-data-encryption-key-32-bytes"}, repo, nil, memory.NewChannelCache(memory.New()), nil)
-	_, err := service.ResolveRoute(t.Context(), ResolveRouteInput{
-		PlatformModelName: "restricted-model",
-		TaskType:          TaskTypeChat,
-		Scope:             RouteScopeUser,
-		UserID:            42,
-	})
-	if !errors.Is(err, ErrPermissionGroupRepoUnavailable) {
-		t.Fatalf("ResolveRoute() error = %v, want permission repository failure", err)
-	}
-}
-
 func (r *routeResolutionRepositoryStub) GetActiveModelByName(context.Context, string) (*domainchannel.PlatformModel, error) {
 	model := r.model
 	return &model, nil

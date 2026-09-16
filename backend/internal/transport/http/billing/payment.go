@@ -63,10 +63,6 @@ type paymentCheckoutPreparation struct {
 // @Failure 500 {object} ErrorDoc
 // @Router /billing/payments/checkout [post]
 func (h *Handler) CreateCheckout(c *gin.Context) {
-	if h.service.IsSub2BillingAuthority() {
-		response.ErrorFrom(c, http.StatusConflict, appbilling.ErrSub2AuthorityRequired)
-		return
-	}
 	var req CreateCheckoutRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.InvalidRequestBody(c, err)
@@ -113,9 +109,6 @@ func (h *Handler) CreateCheckout(c *gin.Context) {
 		})
 	}
 	if err != nil {
-		if writeSub2AuthorityError(c, err) {
-			return
-		}
 		if isPublicPaymentOrderError(err) {
 			response.ErrorFrom(c, http.StatusBadRequest, err)
 		} else {
@@ -183,10 +176,6 @@ func (h *Handler) CreateCheckout(c *gin.Context) {
 // @Success 200 {object} response.Envelope
 // @Router /billing/payments/stripe/webhook [post]
 func (h *Handler) StripeWebhook(c *gin.Context) {
-	if h.service.IsSub2BillingAuthority() {
-		response.ErrorFrom(c, http.StatusConflict, appbilling.ErrSub2AuthorityRequired)
-		return
-	}
 	settings, err := h.resolvePaymentSettings(c.Request.Context())
 	if err != nil || strings.TrimSpace(settings.StripeWebhookSecret) == "" {
 		response.ErrorFrom(c, http.StatusBadRequest, errStripeWebhookNotConfigured)
@@ -258,10 +247,6 @@ func (h *Handler) StripeWebhook(c *gin.Context) {
 // @Success 200 {string} string "success"
 // @Router /billing/payments/epay/notify [post]
 func (h *Handler) EPayNotify(c *gin.Context) {
-	if h.service.IsSub2BillingAuthority() {
-		c.String(http.StatusConflict, "fail")
-		return
-	}
 	settings, err := h.resolvePaymentSettings(c.Request.Context())
 	if err != nil || strings.TrimSpace(settings.EPayKey) == "" {
 		c.String(http.StatusBadRequest, "fail")
@@ -386,8 +371,6 @@ func (h *Handler) respondPaymentCheckoutError(c *gin.Context, provider string, s
 	}
 
 	switch {
-	case appbilling.IsSub2AuthorityError(err):
-		response.ErrorFrom(c, http.StatusConflict, err)
 	case errors.Is(err, domainbilling.ErrEPayGatewayInvalid):
 		response.ErrorWithCode(c, http.StatusServiceUnavailable, "payment.epay_gateway_invalid")
 	case errors.Is(err, appbilling.ErrPaymentProviderUnavailable):
@@ -571,8 +554,6 @@ func isPublicPaymentOrderError(err error) bool {
 
 func writePaymentWebhookError(c *gin.Context, err error) {
 	switch {
-	case appbilling.IsSub2AuthorityError(err):
-		response.ErrorFrom(c, http.StatusConflict, err)
 	case errors.Is(err, appbilling.ErrPaymentOrderNotFound),
 		errors.Is(err, appbilling.ErrInvalidPaymentOrder),
 		errors.Is(err, appbilling.ErrPaymentOrderStateInvalid),

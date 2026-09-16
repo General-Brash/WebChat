@@ -38,16 +38,14 @@ const (
 
 // MediaVideoInput 定义视频生成任务的应用层入参。
 type MediaVideoInput struct {
-	UserID            uint
-	ConversationID    uint
-	RequestID         string
-	TaskType          MediaVideoTaskType
-	Prompt            string
-	PlatformModelName string
-	Options           map[string]any
-	ClientRunID       string
-	// TriggerContext is server-owned; UserID remains the conversation owner.
-	TriggerContext        *llm.TrustedTriggerContext `json:"-"`
+	UserID                uint
+	ConversationID        uint
+	RequestID             string
+	TaskType              MediaVideoTaskType
+	Prompt                string
+	PlatformModelName     string
+	Options               map[string]any
+	ClientRunID           string
 	FileIDs               []string
 	ParentMessagePublicID string
 	SourceMessagePublicID string
@@ -66,27 +64,6 @@ func (s *Service) StreamMediaVideo(ctx context.Context, input MediaVideoInput) (
 	if runID == "" {
 		runID = "run_" + normalizePublicID(uuid.NewString())
 	}
-	ctx, trustedTrigger, err := establishTrustedOperation(
-		ctx,
-		input.TriggerContext,
-		input.UserID,
-		trustedPurposeMediaVideo,
-		runID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	ctx, trustedTrigger, err = prepareTrustedProviderRoot(
-		ctx,
-		trustedTrigger,
-		input.UserID,
-		trustedPurposeMediaVideo,
-		runID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	input.TriggerContext = &trustedTrigger
 	startedAt := time.Now()
 	conversation, err := s.repo.GetConversationByUser(ctx, input.ConversationID, input.UserID)
 	if err != nil {
@@ -124,22 +101,16 @@ func (s *Service) StreamMediaVideo(ctx context.Context, input MediaVideoInput) (
 		videoEndpoint = llm.EndpointVideoExtensions
 	}
 	run := &model.Run{
-		RunID:               runID,
-		RequestID:           strings.TrimSpace(input.RequestID),
-		UserID:              input.UserID,
-		TriggererUserID:     trustedTrigger.TriggererUserID,
-		ResourceOwnerUserID: trustedTrigger.ResourceOwnerUserID,
-		Purpose:             trustedTrigger.Purpose,
-		ExecutionID:         strings.TrimSpace(trustedTrigger.ExecutionID),
-		ParentExecutionID:   strings.TrimSpace(trustedTrigger.ParentExecutionID),
-		TriggerCreatedAt:    trustedTriggerCreatedAtPointer(trustedTrigger),
-		ConversationID:      input.ConversationID,
-		TaskType:            routeTaskType,
-		Endpoint:            videoEndpoint,
-		Provider:            strings.TrimSpace(conversation.Provider),
-		RequestedModelName:  platformModelName,
-		Status:              "running",
-		StartedAt:           startedAt,
+		RunID:              runID,
+		RequestID:          strings.TrimSpace(input.RequestID),
+		UserID:             input.UserID,
+		ConversationID:     input.ConversationID,
+		TaskType:           routeTaskType,
+		Endpoint:           videoEndpoint,
+		Provider:           strings.TrimSpace(conversation.Provider),
+		RequestedModelName: platformModelName,
+		Status:             "running",
+		StartedAt:          startedAt,
 	}
 	if err = s.claimConversationRun(ctx, run); err != nil {
 		return nil, err
@@ -207,7 +178,7 @@ func (s *Service) StreamMediaVideo(ctx context.Context, input MediaVideoInput) (
 		PlatformModelName: platformModelName,
 		TaskType:          routeTaskType,
 		Scope:             channel.RouteScopeUser,
-		UserID:            trustedTrigger.TriggererUserID,
+		UserID:            input.UserID,
 		ConversationID:    input.ConversationID,
 		RequestID:         strings.TrimSpace(input.RequestID),
 	})
@@ -323,7 +294,6 @@ func (s *Service) StreamMediaVideo(ctx context.Context, input MediaVideoInput) (
 		FileIDs:            moderationFileIDs,
 		ClientRunID:        runID,
 		OnEvent:            input.OnEvent,
-		TriggerContext:     trustedTriggerContextPointer(ctx),
 		UsageAuthorization: input.UsageAuthorization,
 	}, runID, userMessage, assistantMessage)
 	emitMediaEvent(input.OnEvent, "queued", "video task queued", "video")
@@ -331,19 +301,17 @@ func (s *Service) StreamMediaVideo(ctx context.Context, input MediaVideoInput) (
 	cfg := s.cfg.Snapshot()
 	attributionReferer, attributionTitle := s.llmAttribution()
 	routeConfig := llm.RouteConfig{
-		UserID: route.UserID, UpstreamID: route.UpstreamID, RetailModel: route.PlatformModelName,
-		Protocol:             route.Protocol,
-		BaseURL:              route.BaseURL,
-		APIKey:               route.APIKey,
-		HeadersJSON:          route.HeadersJSON,
-		ConnectTimeoutMS:     route.ConnectTimeoutMS,
-		ReadTimeoutMS:        route.ReadTimeoutMS,
-		StreamIdleTimeoutMS:  route.StreamIdleTimeoutMS,
-		Endpoint:             videoEndpoint,
-		UpstreamModel:        route.UpstreamModel,
-		UpstreamModelRawJSON: route.UpstreamModelRawJSON,
-		AttributionReferer:   attributionReferer,
-		AttributionTitle:     attributionTitle,
+		Protocol:            route.Protocol,
+		BaseURL:             route.BaseURL,
+		APIKey:              route.APIKey,
+		HeadersJSON:         route.HeadersJSON,
+		ConnectTimeoutMS:    route.ConnectTimeoutMS,
+		ReadTimeoutMS:       route.ReadTimeoutMS,
+		StreamIdleTimeoutMS: route.StreamIdleTimeoutMS,
+		Endpoint:            videoEndpoint,
+		UpstreamModel:       route.UpstreamModel,
+		AttributionReferer:  attributionReferer,
+		AttributionTitle:    attributionTitle,
 	}
 	filteredOptions := filterModelOptions(input.Options, route.Protocol, modelOptionPolicyConfig{
 		Mode:                  cfg.ModelOptionPolicyMode,
@@ -379,8 +347,6 @@ func (s *Service) StreamMediaVideo(ctx context.Context, input MediaVideoInput) (
 
 	emitMediaEvent(input.OnEvent, "running", "generating video", "video")
 	generateInput := llm.GenerateInput{
-		UserID: input.UserID, RunID: runID, ExecutionID: trustedTrigger.ExecutionID,
-		TriggerContext: trustedTriggerContextPointer(ctx),
 		RequestID:      strings.TrimSpace(input.RequestID),
 		ConversationID: input.ConversationID,
 		Messages: []llm.Message{{
@@ -395,23 +361,6 @@ func (s *Service) StreamMediaVideo(ctx context.Context, input MediaVideoInput) (
 		parts = append(parts, llm.ContentPart{Kind: llm.ContentPartText, Text: strings.TrimSpace(input.Prompt)})
 		parts = append(parts, videoInputParts...)
 		generateInput.Messages = []llm.Message{{Role: "user", Parts: parts}}
-	}
-	providerCtx, providerTrigger, providerErr := prepareTrustedProviderExecution(
-		ctx,
-		&generateInput,
-		input.UserID,
-		trustedPurposeMediaVideo,
-		runID,
-	)
-	if providerErr != nil {
-		retErr = providerErr
-		return nil, providerErr
-	}
-	ctx = providerCtx
-	applyTrustedTriggerToRun(run, providerTrigger)
-	if err = s.repo.UpdateConversationRun(ctx, run); err != nil {
-		retErr = err
-		return nil, err
 	}
 
 	output, err := s.llmClient.Generate(ctx, routeConfig, generateInput)
@@ -442,24 +391,6 @@ func (s *Service) StreamMediaVideo(ctx context.Context, input MediaVideoInput) (
 		s.routeResolver.MarkRouteFailure(ctx, route, err)
 		retErr = wrapUpstreamRequestError(err)
 		_ = s.repo.UpdateMessageState(ctx, assistantMessage.ID, "error", classifyRunErrorCode(retErr), textutil.TruncateTrimmed(messageErrorSummary(retErr), 255))
-		if llm.RequestWasAccepted(err) {
-			pending := buildFailedMediaBillingResult(failedMediaBillingResultInput{
-				UserMessage:      userMessage,
-				AssistantMessage: assistantMessage,
-				Route:            *route,
-				EffectiveOptions: filteredOptions,
-				StartedAt:        startedAt,
-				DurationSeconds:  durationSeconds,
-				Failure:          retErr,
-				Billable:         true,
-			})
-			if pending != nil {
-				pending.BillingPending = true
-				pending.BillingPendingReason = "authority_query_required"
-				applyMediaRunUsage(run, pending)
-			}
-			return pending, retErr
-		}
 		return nil, retErr
 	}
 	s.routeResolver.MarkRouteSuccess(ctx, route)
@@ -588,26 +519,25 @@ func (s *Service) StreamMediaVideo(ctx context.Context, input MediaVideoInput) (
 	run.ReasoningTokens = usage.ReasoningTokens
 
 	result = &SendMessageResult{
-		UserMessage:           *userMessage,
-		AssistantMessage:      *assistantMessage,
-		MetadataRefreshHint:   s.resolveConversationMetadataRefreshHint(ctx, *conversation, *userMessage),
-		Billable:              true,
-		UpstreamID:            route.UpstreamID,
-		UpstreamName:          route.UpstreamName,
-		PlatformModelName:     route.PlatformModelName,
-		RoutedBindingCode:     route.BindingCode,
-		UpstreamModelName:     route.UpstreamModel,
-		UpstreamProtocol:      route.Protocol,
-		ProviderReturnedModel: strings.TrimSpace(output.ReturnedModel),
-		EffectiveOptions:      filteredOptions,
-		UsageSpeed:            usage.Speed,
-		UsageServiceTier:      usage.ServiceTier,
-		RawUsageJSON:          usage.RawUsageJSON,
-		CacheWrite5mTokens:    usage.CacheWrite5mTokens,
-		CacheWrite1hTokens:    usage.CacheWrite1hTokens,
-		StartedAt:             startedAt,
-		LatencyMS:             latencyMS,
-		DurationSeconds:       durationSeconds,
+		UserMessage:         *userMessage,
+		AssistantMessage:    *assistantMessage,
+		MetadataRefreshHint: s.resolveConversationMetadataRefreshHint(ctx, *conversation, *userMessage),
+		Billable:            true,
+		UpstreamID:          route.UpstreamID,
+		UpstreamName:        route.UpstreamName,
+		PlatformModelName:   route.PlatformModelName,
+		RoutedBindingCode:   route.BindingCode,
+		UpstreamModelName:   route.UpstreamModel,
+		UpstreamProtocol:    route.Protocol,
+		EffectiveOptions:    filteredOptions,
+		UsageSpeed:          usage.Speed,
+		UsageServiceTier:    usage.ServiceTier,
+		RawUsageJSON:        usage.RawUsageJSON,
+		CacheWrite5mTokens:  usage.CacheWrite5mTokens,
+		CacheWrite1hTokens:  usage.CacheWrite1hTokens,
+		StartedAt:           startedAt,
+		LatencyMS:           latencyMS,
+		DurationSeconds:     durationSeconds,
 	}
 	if moderationCoord != nil {
 		// Omni Moderation has no video modality. The prompt and optional input

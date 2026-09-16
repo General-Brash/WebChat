@@ -542,14 +542,11 @@ func (s *Service) applyAuthSettingDependencies(ctx context.Context, patches []Pa
 	usernameLoginEnabled, _ := strconv.ParseBool(next["auth:username_login_enabled"])
 	thirdPartyLoginEnabled, _ := strconv.ParseBool(next["auth:third_party_login_enabled"])
 	if !emailLoginEnabled && !usernameLoginEnabled {
-		sub2Authority := false
-		if authority, ok := s.authSafety.(interface{ UsesSub2Authority() bool }); ok {
-			sub2Authority = authority.UsesSub2Authority()
+		if !thirdPartyLoginEnabled {
+			return nil, newSettingValidationError(settingCodeInvalidValue, SettingValidationDetails{
+				Field: "auth:third_party_login_enabled", Rule: "dependency", Param: "username_or_email_login",
+			})
 		}
-		if !thirdPartyLoginEnabled && !sub2Authority {
-			return nil, newSettingValidationError(settingCodeInvalidValue, SettingValidationDetails{Field: "auth:third_party_login_enabled", Rule: "dependency", Param: "login_method"})
-		}
-
 		if s.authSafety == nil {
 			return nil, newSettingValidationError(settingCodeInvalidValue, SettingValidationDetails{
 				Field: "auth:third_party_login_enabled", Rule: "dependency", Param: "superadmin_identity",

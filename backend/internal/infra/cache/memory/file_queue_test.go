@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	portllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 )
 
@@ -109,25 +108,6 @@ func TestFileEmbeddingMessagePreservesJobMetadataWhenRequeued(t *testing.T) {
 	}
 }
 
-func TestFileEmbeddingQueueRejectsOldTaskSignatureOnRequeue(t *testing.T) {
-	cache := New()
-	ctx := context.Background()
-	if err := cache.EnqueueFileEmbedding(ctx, 0, "file_platform", "signature@1536", "https://embedding.example/v1"); err != nil {
-		t.Fatalf("enqueue embedding: %v", err)
-	}
-	messages, err := cache.ReadFileEmbeddingMessages(ctx, "worker_a")
-	if err != nil || len(messages) != 1 {
-		t.Fatalf("read embedding message: messages=%#v err=%v", messages, err)
-	}
-
-	stale := messages[0]
-	stale.EmbeddingSignature = "old-signature@1536"
-	requeued, err := cache.RequeueFileProcessingMessage(ctx, "worker_a", stale, 1, "stale task")
-	if err != nil || requeued {
-		t.Fatalf("old task signature must not requeue over the stored task: requeued=%v err=%v", requeued, err)
-	}
-}
-
 func TestFileEmbeddingQueueIsIsolatedFromExtractionQueue(t *testing.T) {
 	cache := New()
 	ctx := context.Background()
@@ -152,86 +132,5 @@ func TestFileEmbeddingQueueIsIsolatedFromExtractionQueue(t *testing.T) {
 	}
 	if embeddingMessages[0].Queue != repository.FileProcessingQueueEmbedding {
 		t.Fatalf("embedding message queue = %q", embeddingMessages[0].Queue)
-	}
-}
-
-func TestFileProcessingTrustedTriggerRoundTripReclaimAndTaskCAS(t *testing.T) {
-	cache := New()
-	ctx := context.Background()
-	createdAt := time.Date(2026, time.September, 16, 9, 0, 0, 0, time.UTC)
-	actorA := portllm.TrustedTriggerContext{
-		TriggererUserID:     11,
-		ResourceOwnerUserID: 0,
-		Purpose:             "file.extract",
-		RunID:               "run_file_a",
-		ExecutionID:         "exec_file_a",
-		ParentExecutionID:   "exec_parent",
-		CreatedAt:           createdAt,
-	}
-	if err := cache.EnqueueFileProcessing(ctx, 0, "file_platform", 0, "", actorA); err != nil {
-		t.Fatalf("enqueue platform file: %v", err)
-	}
-	messages, err := cache.ReadFileProcessingMessages(ctx, "worker_a")
-	if err != nil || len(messages) != 1 {
-		t.Fatalf("read platform file: messages=%#v err=%v", messages, err)
-	}
-	message := messages[0]
-	if message.UserID != 0 || !repository.SameTrustedTriggerContext(message.TriggerContext, actorA) {
-		t.Fatalf("owner/trigger attribution changed in memory payload: %#v", message)
-	}
-
-	forged := message
-	forged.TriggerContext.TriggererUserID = 12
-	if requeued, err := cache.RequeueFileProcessingMessage(ctx, "worker_a", forged, 1, "forged"); err != nil || requeued {
-		t.Fatalf("mismatched task envelope must be rejected: requeued=%v err=%v", requeued, err)
-	}
-
-	cache.mu.Lock()
-	lease := cache.fileProcessingQueue.inflight[message.ID]
-	lease.leasedAt = time.Now().Add(-fileProcessingMinIdle - time.Second)
-	cache.fileProcessingQueue.inflight[message.ID] = lease
-	cache.mu.Unlock()
-	claimed, err := cache.ClaimTimedOutFileProcessingMessages(ctx, "worker_b")
-	if err != nil || len(claimed) != 1 || !repository.SameTrustedTriggerContext(claimed[0].TriggerContext, actorA) {
-		t.Fatalf("reclaim changed trigger attribution: claimed=%#v err=%v", claimed, err)
-	}
-	if requeued, err := cache.RequeueFileProcessingMessage(ctx, "worker_b", claimed[0], 1, "retry"); err != nil || !requeued {
-		t.Fatalf("requeue reclaimed message: requeued=%v err=%v", requeued, err)
-	}
-	retried, err := cache.ReadFileProcessingMessages(ctx, "worker_c")
-	if err != nil || len(retried) != 1 || !repository.SameTrustedTriggerContext(retried[0].TriggerContext, actorA) {
-		t.Fatalf("retry changed trigger attribution: messages=%#v err=%v", retried, err)
-	}
-
-	// Attribution is per logical operation, not forever per file. A new run ID
-	// may intentionally carry a new authenticated actor after the old task ends.
-	if settled, err := cache.SettleFileProcessingMessage(ctx, "worker_c", retried[0]); err != nil || !settled {
-		t.Fatalf("settle old operation: settled=%v err=%v", settled, err)
-	}
-	actorB := actorA
-	actorB.TriggererUserID = 12
-	actorB.RunID = "run_file_b"
-	actorB.ExecutionID = "exec_file_b"
-	if err := cache.EnqueueFileProcessing(ctx, 0, "file_platform", 0, "", actorB); err != nil {
-		t.Fatalf("enqueue explicit new operation: %v", err)
-	}
-	newOperation, err := cache.ReadFileProcessingMessages(ctx, "worker_d")
-	if err != nil || len(newOperation) != 1 || !repository.SameTrustedTriggerContext(newOperation[0].TriggerContext, actorB) {
-		t.Fatalf("new operation did not carry new actor: messages=%#v err=%v", newOperation, err)
-	}
-}
-
-func TestLegacyFileProcessingMessageKeepsMissingActor(t *testing.T) {
-	cache := New()
-	ctx := context.Background()
-	if err := cache.EnqueueFileProcessing(ctx, 0, "legacy_platform", 0, ""); err != nil {
-		t.Fatalf("enqueue legacy platform message: %v", err)
-	}
-	messages, err := cache.ReadFileProcessingMessages(ctx, "worker")
-	if err != nil || len(messages) != 1 {
-		t.Fatalf("read legacy platform message: messages=%#v err=%v", messages, err)
-	}
-	if messages[0].TriggerContext.TriggererUserID != 0 || repository.HasTrustedTriggerMetadata(messages[0].TriggerContext) {
-		t.Fatalf("legacy missing actor was backfilled: %#v", messages[0].TriggerContext)
 	}
 }

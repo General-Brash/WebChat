@@ -39,7 +39,6 @@ export function LoginPage({ nextPath }: LoginPageProps) {
     emailRegistrationEnabled,
     emailVerificationEnabled,
     handleProviderLogin,
-    handleSub2Login,
     loginProviders,
     mode,
     onLoginSubmit,
@@ -76,7 +75,6 @@ export function LoginPage({ nextPath }: LoginPageProps) {
     switchTwoFactorVerificationMethod,
     setUsername,
     submitting,
-    sub2AuthorityEnabled,
     toggleLoginMode,
     twoFactorChallengeToken,
     twoFactorCode,
@@ -117,19 +115,6 @@ export function LoginPage({ nextPath }: LoginPageProps) {
         >
           {configReady ? (
             <div className="min-h-0 overflow-hidden px-2">
-            {mode === "login" && sub2AuthorityEnabled && !twoFactorChallengeToken ? (
-              <div className="mt-7 space-y-3">
-                <p className="text-center text-sm leading-6 text-muted-foreground">{t("sub2Description")}</p>
-                <Button
-                  type="button"
-                  className="h-9 w-full rounded-md bg-foreground text-sm font-semibold text-background shadow-none hover:bg-foreground/90"
-                  onClick={handleSub2Login}
-                >
-                  {t("sub2Login")}
-                </Button>
-              </div>
-            ) : null}
-
             {mode === "login" && twoFactorChallengeToken ? (
               <>
                 <form className="mt-7 space-y-4" onSubmit={onLoginSubmit}>

@@ -767,14 +767,6 @@ function BillingCostBadge({ item, billingDisplay }: { item: ChatMetaMessage; bil
   const t = useTranslations("chat.meta");
   const labels = useBillingMetaLabels();
   const cost = item.billingCost;
-  let authority: { authority?: string; authority_state?: string } = {};
-  try { authority = JSON.parse(cost?.pricingSnapshotJSON || "{}"); } catch { /* Legacy snapshots keep their existing formatter. */ }
-  if (authority.authority === "sub2") {
-    return <span className="ml-0.5 inline-flex items-center gap-1 rounded bg-muted/30 px-1.5 py-0.5 text-[10px] text-muted-foreground" title={t("sub2Receipt")}>
-      <CircleDollarSign className="size-3" strokeWidth={1.4} />
-      {authority.authority_state === "SETTLED" ? formatBillingCost(nanousdToUSD(cost?.billedNanousd || 0), billingDisplay) : t("sub2Pending")}
-    </span>;
-  }
   if (!cost || cost.billingMode === "self") {
     return null;
   }

@@ -58,7 +58,6 @@ type UpstreamRemoteModelView struct {
 	SuggestedKindsJSON         string
 	SuggestedProtocol          string
 	SuggestedProtocols         []string
-	SourceGroupIDs             []int64
 	BindingCode                string
 	BoundPlatformModels        []string
 	UpstreamModelStatus        string
@@ -124,8 +123,6 @@ type ImportUpstreamModelResultView struct {
 
 // UpstreamView 上游展示数据（内部传输，不携带序列化标记）。
 type UpstreamView struct {
-	Kind                 string
-	Sub2GroupIDs         []int64
 	ID                   uint
 	Name                 string
 	BaseURL              string

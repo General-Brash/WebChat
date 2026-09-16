@@ -8,7 +8,6 @@ import (
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/channel"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
-	"github.com/google/uuid"
 )
 
 const textTaskFollowModel = "follow"
@@ -139,8 +138,6 @@ func buildTextTaskGenerateInput(route *channel.ResolvedRoute, cfg config.Config,
 		return llm.GenerateInput{Messages: cloneLLMMessages(messages)}
 	}
 	input := llm.GenerateInput{
-		UserID: route.UserID, ExecutionID: uuid.NewString(),
-
 		Messages: normalizeTextTaskSystemMessages(route, messages),
 		Options: filterModelOptions(nil, route.Protocol, modelOptionPolicyConfig{
 			Mode:                  cfg.ModelOptionPolicyMode,

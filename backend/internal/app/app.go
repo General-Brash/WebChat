@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	sub2http "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/sub2"
 	"net/http"
 	"os"
 	"os/signal"
@@ -71,8 +70,6 @@ import (
 	userrepo "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/postgres/user"
 	usersettingsrepo "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/postgres/usersettings"
 	platformruntime "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/runtime"
-	sub2infra "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/sub2"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/lifecycle"
 	platformhttp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http"
 	adminhttp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/admin"
@@ -105,7 +102,6 @@ type App struct {
 	redis                  *redis.Client
 	geoResolver            *geoip.Client
 	identityProviderClient *identityprovider.Client
-	sub2Client             *sub2infra.Client
 	llmClient              *llm.Client
 	mcpClient              *mcp.Client
 	embeddingClient        *embedding.Client
@@ -156,14 +152,6 @@ func NewApp() (*App, error) {
 	cfg := config.Load()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
-	}
-	var sub2Client *sub2infra.Client
-	var err error
-	if cfg.UsesSub2Authority() {
-		sub2Client, err = sub2infra.New(cfg)
-		if err != nil {
-			return nil, fmt.Errorf("init Sub2 authority: %w", err)
-		}
 	}
 	runtimeCfg := config.NewRuntime(cfg)
 
@@ -242,12 +230,7 @@ func NewApp() (*App, error) {
 	userRepo := userrepo.NewRepo(db)
 	userService := user.NewService(userRepo)
 	billingRepo := billingrepo.NewRepo(db)
-	billingRepoForService := repository.BillingRepository(billingRepo)
-	if cfg.UsesSub2BillingAuthority() {
-		billingRepoForService = &sub2BillingRepository{BillingRepository: billingRepo}
-	}
-	billingService := billing.NewService(billingRepoForService)
-	billingService.SetLocalBillingEnabled(!cfg.UsesSub2BillingAuthority())
+	billingService := billing.NewService(billingRepo)
 	billingService.SetAuditWriter(auditService)
 	billingService.SetRedemptionCodeSecret(cfg.DataEncryptionKey)
 	officialPricingService := billing.NewOfficialPricingService(
@@ -260,7 +243,6 @@ func NewApp() (*App, error) {
 	// 对象存储工厂由组合根显式注入，避免服务实例依赖进程级可变状态。
 	objectStoreProvider := appstorage.NewRuntimeProvider(runtimeCfg, objectstore.New)
 	// 抽取引擎工厂由组合根显式注入；具体客户端构造为 nil 时必须返回 nil 接口，避免 typed-nil 绕过判空。
-	var sub2GatewayService *sub2Gateway
 	extractionFactories := extraction.EngineFactories{
 		NewTika: func(cfg config.Config) extraction.DocumentExtractor {
 			if client := extractengines.NewTika(cfg); client != nil {
@@ -281,17 +263,7 @@ func NewApp() (*App, error) {
 			return nil
 		},
 		NewOCR: func(provider string, cfg config.Config) extraction.OCRExtractor {
-			if cfg.UsesSub2Authority() {
-				cfg.ExtractLLMOCRBaseURL = cfg.Sub2BaseURL
-				cfg.ExtractMistralOCRBaseURL = cfg.Sub2BaseURL
-				cfg.ExtractLLMOCRAuthToken = ""
-				cfg.ExtractMistralOCRAuthToken = ""
-			}
 			if client := extractengines.NewOCR(provider, cfg); client != nil {
-				if sub2GatewayService != nil {
-					client.SetLLMGateway(sub2GatewayService)
-					client.SetRequestExecutor(sub2GatewayService.mistralHTTP)
-				}
 				return client
 			}
 			return nil
@@ -313,14 +285,10 @@ func NewApp() (*App, error) {
 	)
 	authService.SetLogger(log)
 	authService.SetProviderAuthBridge(buildProviderAuthBridge(cfg, redisClient, memoryCache))
-	authService.SetSub2Integration(sub2Client, userRepo)
 	authService.SetObjectStoreProvider(objectStoreProvider)
 	authService.SetAuditWriter(auditService)
 	settingsService.SetAuthSafetyService(authService)
-	billingService.SetExternalIdentityChecker(authService)
-	if !cfg.UsesSub2Authority() {
-		authService.SetSubscriptionResolver(billingService)
-	}
+	authService.SetSubscriptionResolver(billingService)
 	bootstrapSuperAdmin, err := authService.EnsureBootstrapSuperAdmin(context.Background())
 	if err != nil {
 		return nil, err
@@ -337,25 +305,15 @@ func NewApp() (*App, error) {
 	trustedOutboundPolicy := cfg.TrustedOutboundPolicy()
 	strictOutboundPolicy := cfg.StrictOutboundPolicy()
 	llmClient := llm.NewClient(trustedOutboundPolicy)
-	var executionLLM llmExecutionGateway = llmClient
-	if cfg.UsesSub2Authority() {
-		sub2GatewayService = newSub2Gateway(cfg, db, authService, sub2Client, llmClient, channelRepo, billingRepo, billingService)
-		sub2GatewayService.runtime = runtimeCfg
-		executionLLM = sub2GatewayService
-		billingService.SetSub2UsageAuthority(sub2GatewayService)
-	}
-	sub2Module := sub2http.NewModule(sub2GatewayService)
 	mcpClient := mcp.NewClient(trustedOutboundPolicy)
 	mediaArtifactClient := mediaartifact.New(strictOutboundPolicy)
-	channelService := channel.NewServiceWithRuntime(runtimeCfg, channelRepo, channelRepo, channelCache, executionLLM)
+	channelService := channel.NewServiceWithRuntime(runtimeCfg, channelRepo, channelRepo, channelCache, llmClient)
 	channelService.SetLogger(log)
 	channelService.SetObjectStoreProvider(objectStoreProvider)
 	channelService.SetModelIconAssetRepository(channelRepo)
 	channelService.SetBillingModelPricingFilter(billingService)
 	channelService.SetPermissionGroupRepo(channelRepo)
-	if !cfg.UsesSub2Authority() {
-		channelService.SetSubscriptionGroupResolver(&subscriptionGroupAdapter{billing: billingService})
-	}
+	channelService.SetSubscriptionGroupResolver(&subscriptionGroupAdapter{billing: billingService})
 	billingService.SetGroupRateMultiplierResolver(channelRepo)
 	billingService.SetPermissionGroupLookup(channelRepo)
 	billingService.SetModelPricingInvalidator(channelService.InvalidateModelCatalog)
@@ -370,9 +328,6 @@ func NewApp() (*App, error) {
 	conversationCache := buildConversationCache(cfg, redisClient, memoryCache)
 	mcpRepo := mcprepo.NewRepo(db)
 	embedClient := embedding.New(trustedOutboundPolicy)
-	if sub2GatewayService != nil {
-		embedClient.SetRequestExecutor(sub2GatewayService.embeddingHTTP)
-	}
 	compactService := compact.NewServiceWithRuntime(runtimeCfg, conversationRepo, log)
 	extractionService := extraction.NewServiceWithRuntime(runtimeCfg, extractionFactories)
 	extractionService.SetObjectStoreProvider(objectStoreProvider)
@@ -404,7 +359,7 @@ func NewApp() (*App, error) {
 		Cache:             conversationCache,
 		RouteResolver:     channelService,
 		MemoryRecorder:    memoryService,
-		LLMClient:         executionLLM,
+		LLMClient:         llmClient,
 		MediaDownloader:   mediaArtifactClient,
 		MCPClient:         mcpClient,
 		CompactService:    compactService,
@@ -444,7 +399,6 @@ func NewApp() (*App, error) {
 	mcpModule := mcphttp.NewModule(mcpHandler)
 	adminService := admin.NewService(userService, auditService)
 	adminService.SetAuthSecurityService(authService)
-	adminService.SetSub2IdentityAuthority(authService)
 	adminService.SetSystemEventService(systemEventService)
 	adminService.SetUsageLogService(billingService)
 	adminService.SetUsageStatisticsService(billingService)
@@ -492,11 +446,10 @@ func NewApp() (*App, error) {
 	knowledgeBaseHandler := knowledgebasehttp.NewHandler(knowledgeBaseService, runtimeCfg)
 	knowledgeBaseModule := knowledgebasehttp.NewModule(knowledgeBaseHandler)
 
-	hc := newHealthChecker(db, cfg.CacheDriver, redisClient, sub2Client)
+	hc := newHealthChecker(db, cfg.CacheDriver, redisClient)
 	rateLimiter := buildRateLimiter(cfg, redisClient, memoryCache)
 	engine, err := platformhttp.NewEngine(runtimeCfg, log, platformhttp.Modules{
 		Auth:              authModule,
-		Sub2:              sub2Module,
 		AuthService:       authService,
 		Channel:           channelModule,
 		Conversation:      conversationModule,
@@ -528,9 +481,6 @@ func NewApp() (*App, error) {
 	}
 
 	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
-	if sub2GatewayService != nil {
-		sub2GatewayService.StartBackgroundWorkers(backgroundCtx)
-	}
 	if _, reconcileErr := embeddingService.ReconcileIndex(backgroundCtx); reconcileErr != nil {
 		log.Warn("embedding index reconciliation failed", zap.Error(reconcileErr))
 	}
@@ -547,7 +497,6 @@ func NewApp() (*App, error) {
 		redis:                  redisClient,
 		geoResolver:            geoResolver,
 		identityProviderClient: identityProviderClient,
-		sub2Client:             sub2Client,
 		llmClient:              llmClient,
 		mcpClient:              mcpClient,
 		embeddingClient:        embedClient,
@@ -651,9 +600,6 @@ func (a *App) Close() {
 	}
 	if a.identityProviderClient != nil {
 		a.identityProviderClient.CloseIdleConnections()
-	}
-	if a.sub2Client != nil {
-		a.sub2Client.CloseIdleConnections()
 	}
 	if a.llmClient != nil {
 		a.llmClient.CloseIdleConnections()

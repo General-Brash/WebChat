@@ -52,10 +52,10 @@ func (s *Service) prepareTemporaryKnowledgeContext(
 		ragCtx, cancel = context.WithTimeout(ctx, time.Duration(cfg.RAGWaitReadyMS)*time.Millisecond)
 	}
 	result, retrieveErr := s.ragSvc.RetrieveWithStatus(ragCtx, apprag.RetrieveInput{
-		UserID:         input.UserID,
-		Query:          query,
-		FileObjs:       files,
-		Ephemeral:      true,
+		UserID:    input.UserID,
+		Query:     query,
+		FileObjs:  files,
+		Ephemeral: true,
 	})
 	cancel()
 	if retrieveErr != nil || result.Status == apprag.RetrieveStatusUnavailable {

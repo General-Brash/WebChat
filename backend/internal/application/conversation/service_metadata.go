@@ -73,7 +73,6 @@ type conversationMetadataLLMResult struct {
 	UpstreamName      string
 	UpstreamModel     string
 	LatencyMS         int64
-	PayerUserID       uint
 	Authorization     *domainbilling.UsageAuthorization
 }
 
@@ -84,9 +83,6 @@ type conversationMetadataLLMInput struct {
 	ConversationID    uint
 	ServiceCode       string
 	Prompt            string
-	// TriggerContext is the immutable operation envelope captured before the
-	// metadata worker is detached from the request lifecycle.
-	TriggerContext *llm.TrustedTriggerContext
 }
 
 type conversationMetadataGenerationPlan struct {
@@ -162,14 +158,13 @@ func (s *Service) generateConversationMetadata(
 			ConversationID:    conversation.ID,
 			ServiceCode:       "title",
 			Prompt:            prompt,
-			TriggerContext:     trustedTriggerContextPointer(ctx),
 		})
 		if err != nil {
 			titleErr = err
 		} else {
 			if err = s.recordBasicServiceUsage(ctx, basicServiceUsageInput{
 				Authorization:     out.Authorization,
-				UserID:            out.PayerUserID,
+				UserID:            conversation.UserID,
 				ConversationID:    conversation.ID,
 				ServiceCode:       "title",
 				ServiceName:       "标题",
@@ -219,14 +214,13 @@ func (s *Service) generateConversationMetadata(
 			ConversationID:    conversation.ID,
 			ServiceCode:       "labels",
 			Prompt:            labelsPrompt,
-			TriggerContext:     trustedTriggerContextPointer(ctx),
 		})
 		if err != nil {
 			labelsErr = err
 		} else {
 			if err = s.recordBasicServiceUsage(ctx, basicServiceUsageInput{
 				Authorization:     labelsOut.Authorization,
-				UserID:            labelsOut.PayerUserID,
+				UserID:            conversation.UserID,
 				ConversationID:    conversation.ID,
 				ServiceCode:       "labels",
 				ServiceName:       "标签",
@@ -312,7 +306,6 @@ func (s *Service) RegenerateConversationTitle(ctx context.Context, userID uint, 
 			ConversationID:    conversation.ID,
 			ServiceCode:       "title",
 			Prompt:            prompt,
-			TriggerContext:     trustedTriggerContextPointer(ctx),
 		})
 		if generateErr != nil {
 			if s.logger != nil {
@@ -324,7 +317,7 @@ func (s *Service) RegenerateConversationTitle(ctx context.Context, userID uint, 
 			}
 		} else if usageErr := s.recordBasicServiceUsage(ctx, basicServiceUsageInput{
 			Authorization:     out.Authorization,
-			UserID:            out.PayerUserID,
+			UserID:            conversation.UserID,
 			ConversationID:    conversation.ID,
 			ServiceCode:       "title",
 			ServiceName:       "标题",
@@ -568,31 +561,10 @@ func renderConversationMetadataPrompt(raw string, fallback string, messages stri
 	return strings.TrimSpace(prompt) + "\n\n" + messages
 }
 
-func bindConversationMetadataTriggerContext(ctx context.Context, provided *llm.TrustedTriggerContext) (context.Context, error) {
-	if ctx == nil {
-		return ctx, llm.ErrTrustedTriggerRequired
-	}
-	if provided != nil {
-		bound, err := llm.WithTrustedTriggerContext(ctx, *provided)
-		if err != nil {
-			return ctx, err
-		}
-		ctx = bound
-	}
-	if !llm.ExecutionSubjectFromContext(ctx).HasTriggerer() {
-		return ctx, llm.ErrTrustedTriggerRequired
-	}
-	return ctx, nil
-}
-
 // callConversationMetadataLLM 使用内部文本任务路由生成会话标题或标签。
 // 即使会话当前模型是图片模型，也只会解析聊天路由。
 func (s *Service) callConversationMetadataLLM(ctx context.Context, input conversationMetadataLLMInput) (*conversationMetadataLLMResult, error) {
-	trustedCtx, trustErr := bindConversationMetadataTriggerContext(ctx, input.TriggerContext)
-	if trustErr != nil {
-		return nil, fmt.Errorf("metadata trusted context: %w", trustErr)
-	}
-	routes, err := s.resolveTextTaskRouteCandidates(trustedCtx, textTaskRouteInput{
+	routes, err := s.resolveTextTaskRouteCandidates(ctx, textTaskRouteInput{
 		ConfiguredModel:   input.ConfiguredModel,
 		ConversationModel: input.ConversationModel,
 		UserID:            input.UserID,
@@ -612,39 +584,28 @@ func (s *Service) callConversationMetadataLLM(ctx context.Context, input convers
 			continue
 		}
 		routeConfig := llm.RouteConfig{
-			UserID: route.UserID, UpstreamID: route.UpstreamID, RetailModel: route.PlatformModelName,
-			Protocol:             route.Protocol,
-			BaseURL:              route.BaseURL,
-			APIKey:               route.APIKey,
-			HeadersJSON:          route.HeadersJSON,
-			ConnectTimeoutMS:     route.ConnectTimeoutMS,
-			ReadTimeoutMS:        route.ReadTimeoutMS,
-			StreamIdleTimeoutMS:  route.StreamIdleTimeoutMS,
-			Endpoint:             llm.DefaultEndpointForAdapter(route.Protocol),
-			UpstreamModel:        route.UpstreamModel,
-			UpstreamModelRawJSON: route.UpstreamModelRawJSON,
-			AttributionReferer:   attributionReferer,
-			AttributionTitle:     attributionTitle,
+			Protocol:            route.Protocol,
+			BaseURL:             route.BaseURL,
+			APIKey:              route.APIKey,
+			HeadersJSON:         route.HeadersJSON,
+			ConnectTimeoutMS:    route.ConnectTimeoutMS,
+			ReadTimeoutMS:       route.ReadTimeoutMS,
+			StreamIdleTimeoutMS: route.StreamIdleTimeoutMS,
+			Endpoint:            llm.DefaultEndpointForAdapter(route.Protocol),
+			UpstreamModel:       route.UpstreamModel,
+			AttributionReferer:  attributionReferer,
+			AttributionTitle:    attributionTitle,
 		}
 		startedAt := time.Now()
 		generateInput := buildTextTaskGenerateInput(route, s.cfg.Snapshot(), messages)
-		generateInput.UserID = input.UserID
-		providerCtx, trustedTrigger, trustErr := prepareTrustedProviderExecution(
-			trustedCtx, &generateInput, input.UserID, trustedPurposeChatMain,
-			llm.ExecutionSubjectFromContext(trustedCtx).RunID,
-		)
-		if trustErr != nil {
-			lastErr = fmt.Errorf("metadata trusted execution: %w", trustErr)
-			continue
-		}
-		authorization, authorizeErr := s.authorizeBasicServiceUsage(providerCtx, trustedTrigger.TriggererUserID, route.PlatformModelName, input.ServiceCode)
+		authorization, authorizeErr := s.authorizeBasicServiceUsage(ctx, input.UserID, route.PlatformModelName, input.ServiceCode)
 		if authorizeErr != nil {
 			lastErr = fmt.Errorf("metadata usage authorization: %w", authorizeErr)
 			continue
 		}
-		out, generateErr := s.llmClient.Generate(providerCtx, routeConfig, generateInput)
+		out, generateErr := s.llmClient.Generate(ctx, routeConfig, generateInput)
 		if generateErr != nil {
-			releaseErr := s.releaseBasicServiceUsageAuthorization(providerCtx, authorization)
+			releaseErr := s.releaseBasicServiceUsageAuthorization(ctx, authorization)
 			lastErr = fmt.Errorf("metadata llm generate: %w", generateErr)
 			if releaseErr != nil {
 				lastErr = errors.Join(lastErr, fmt.Errorf("release metadata usage authorization: %w", releaseErr))
@@ -661,7 +622,6 @@ func (s *Service) callConversationMetadataLLM(ctx context.Context, input convers
 			UpstreamName:      route.UpstreamName,
 			UpstreamModel:     route.UpstreamModel,
 			LatencyMS:         time.Since(startedAt).Milliseconds(),
-			PayerUserID:       trustedTrigger.TriggererUserID,
 			Authorization:     authorization,
 		}, nil
 	}

@@ -9,7 +9,6 @@ import (
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/extraction"
 	domainconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
-	portllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 )
 
 func TestExtractTextForProcessingRequiresExtractionService(t *testing.T) {
@@ -66,7 +65,6 @@ func (r *processingStateRepositoryStub) TryClaimFileObjectProcessing(
 	allowRecovery bool,
 	_ string,
 	_ string,
-	_ ...portllm.TrustedTriggerContext,
 ) (bool, error) {
 	r.claimRecovery = allowRecovery
 	return true, nil

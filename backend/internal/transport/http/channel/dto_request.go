@@ -7,29 +7,25 @@ type BatchDeleteRequest struct {
 
 // CreateUpstreamRequest 创建上游请求。
 type CreateUpstreamRequest struct {
-	Kind                 string  `json:"kind,omitempty" binding:"omitempty,oneof=direct sub2"`
-	Sub2GroupIDs         []int64 `json:"sub2GroupIDs,omitempty" binding:"dive,gt=0"`
-	Name                 string  `json:"name" binding:"required,min=2,max=128"`
-	BaseURL              string  `json:"baseURL" binding:"omitempty,url,max=512"`
-	Compatible           string  `json:"compatible,omitempty" binding:"omitempty,oneof=openai anthropic google xai openrouter custom"`
-	ProtocolDefaultsJSON string  `json:"protocolDefaultsJSON,omitempty" binding:"max=10000"`
-	APIKeys              string  `json:"apiKeys" binding:"omitempty,min=2,max=10000"`
-	Status               string  `json:"status,omitempty" binding:"omitempty,oneof=active inactive"`
-	ConnectTimeoutMS     int     `json:"connectTimeoutMS,omitempty"`
-	ReadTimeoutMS        int     `json:"readTimeoutMS,omitempty"`
-	StreamIdleTimeoutMS  int     `json:"streamIdleTimeoutMS,omitempty"`
-	CbFailureThreshold   int     `json:"cbFailureThreshold,omitempty"`
-	CbModelThreshold     int     `json:"cbModelThreshold,omitempty"`
-	CbThresholdLogic     string  `json:"cbThresholdLogic,omitempty" binding:"omitempty,oneof=or and"`
-	CbDurationMin        int     `json:"cbDurationMin,omitempty"`
-	CbWindowMin          int     `json:"cbWindowMin,omitempty"`
-	HeadersJSON          string  `json:"headersJSON,omitempty" binding:"max=10000"`
+	Name                 string `json:"name" binding:"required,min=2,max=128"`
+	BaseURL              string `json:"baseURL" binding:"required,url,max=512"`
+	Compatible           string `json:"compatible,omitempty" binding:"omitempty,oneof=openai anthropic google xai openrouter custom"`
+	ProtocolDefaultsJSON string `json:"protocolDefaultsJSON,omitempty" binding:"max=10000"`
+	APIKeys              string `json:"apiKeys" binding:"required,min=2,max=10000"`
+	Status               string `json:"status,omitempty" binding:"omitempty,oneof=active inactive"`
+	ConnectTimeoutMS     int    `json:"connectTimeoutMS,omitempty"`
+	ReadTimeoutMS        int    `json:"readTimeoutMS,omitempty"`
+	StreamIdleTimeoutMS  int    `json:"streamIdleTimeoutMS,omitempty"`
+	CbFailureThreshold   int    `json:"cbFailureThreshold,omitempty"`
+	CbModelThreshold     int    `json:"cbModelThreshold,omitempty"`
+	CbThresholdLogic     string `json:"cbThresholdLogic,omitempty" binding:"omitempty,oneof=or and"`
+	CbDurationMin        int    `json:"cbDurationMin,omitempty"`
+	CbWindowMin          int    `json:"cbWindowMin,omitempty"`
+	HeadersJSON          string `json:"headersJSON,omitempty" binding:"max=10000"`
 }
 
 // UpdateUpstreamRequest 更新上游请求。
 type UpdateUpstreamRequest struct {
-	Kind                 *string  `json:"kind,omitempty" binding:"omitempty,oneof=direct sub2"`
-	Sub2GroupIDs         *[]int64 `json:"sub2GroupIDs,omitempty"`
 	Name                 *string  `json:"name,omitempty" binding:"omitempty,min=2,max=128"`
 	BaseURL              *string  `json:"baseURL,omitempty" binding:"omitempty,url,max=512"`
 	Compatible           *string  `json:"compatible,omitempty" binding:"omitempty,oneof=openai anthropic google xai openrouter custom"`

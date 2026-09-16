@@ -104,14 +104,6 @@ func (h *Handler) shouldUseSecureCookie(c *gin.Context) bool {
 // @Success 200 {object} LoginOptionsResponseDoc
 // @Failure 500 {object} ErrorDoc
 // @Router /auth/login-options [get]
-func writeSub2AuthorityRequired(c *gin.Context, err error) bool {
-	if errors.Is(err, appauth.ErrSub2AuthorityRequired) {
-		response.ErrorFrom(c, http.StatusForbidden, err)
-		return true
-	}
-	return false
-}
-
 func (h *Handler) LoginOptions(c *gin.Context) {
 	result, err := h.service.GetLoginOptions(c.Request.Context())
 	if err != nil {
@@ -146,9 +138,6 @@ func (h *Handler) StartEmailRegistration(c *gin.Context) {
 		middleware.ResolveSessionAuditContext(c),
 	)
 	if err != nil {
-		if writeSub2AuthorityRequired(c, err) {
-			return
-		}
 		response.ErrorFrom(c, http.StatusBadRequest, err)
 		return
 	}
@@ -184,9 +173,6 @@ func (h *Handler) CompleteEmailRegistration(c *gin.Context) {
 		},
 	)
 	if err != nil {
-		if writeSub2AuthorityRequired(c, err) {
-			return
-		}
 		response.ErrorFrom(c, http.StatusBadRequest, err)
 		return
 	}
@@ -218,9 +204,6 @@ func (h *Handler) StartPasswordReset(c *gin.Context) {
 		middleware.ResolveSessionAuditContext(c),
 	)
 	if err != nil {
-		if writeSub2AuthorityRequired(c, err) {
-			return
-		}
 		if errors.Is(err, appauth.ErrPasswordResetFailed) {
 			response.ErrorFrom(c, http.StatusBadRequest, err)
 			return
@@ -256,9 +239,6 @@ func (h *Handler) CompletePasswordReset(c *gin.Context) {
 		middleware.MustRequestID(c),
 		middleware.ResolveSessionAuditContext(c),
 	); err != nil {
-		if writeSub2AuthorityRequired(c, err) {
-			return
-		}
 		if errors.Is(err, appauth.ErrPasswordResetFailed) {
 			response.ErrorFrom(c, http.StatusBadRequest, err)
 			return
@@ -318,9 +298,6 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 		},
 	)
 	if err != nil {
-		if writeSub2AuthorityRequired(c, err) {
-			return
-		}
 		if errors.Is(err, appauth.ErrInvalidCredentials) {
 			response.ErrorFrom(c, http.StatusUnauthorized, errInvalidCurrentPassword)
 			return

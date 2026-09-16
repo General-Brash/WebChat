@@ -327,11 +327,6 @@ func applyResponsesStreamEvent(
 	result *portllm.GenerateOutput,
 	onEvent func(portllm.GenerateStreamEvent) error,
 ) error {
-	if returnedModel := strings.TrimSpace(getStringFromPath(parsed, "response", "model")); returnedModel != "" {
-		result.ReturnedModel = returnedModel
-	} else if returnedModel := strings.TrimSpace(getString(parsed["model"])); returnedModel != "" {
-		result.ReturnedModel = returnedModel
-	}
 	eventType := strings.TrimSpace(getString(parsed["type"]))
 	if eventType == "" {
 		eventType = strings.TrimSpace(eventName)

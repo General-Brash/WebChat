@@ -12,7 +12,6 @@ import (
 
 	appadmin "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/admin"
 	auditapp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/audit"
-	appauth "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/auth"
 	appbilling "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/billing"
 	appconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/conversation"
 	applogcleanup "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/logcleanup"
@@ -146,9 +145,6 @@ func (h *Handler) CreateUser(c *gin.Context) {
 			errors.Is(err, user.ErrInvalidSubscriptionExpiry):
 			response.ErrorFrom(c, http.StatusBadRequest, err)
 			return
-		case errors.Is(err, appauth.ErrSub2AuthorityRequired):
-			response.ErrorFrom(c, http.StatusForbidden, err)
-			return
 		default:
 			response.InternalError(c)
 			return
@@ -217,9 +213,7 @@ func (h *Handler) ImportOpenWebUIUsers(c *gin.Context) {
 			errors.Is(err, appadmin.ErrInvalidImportMultiplier):
 			response.ErrorFrom(c, http.StatusBadRequest, err)
 			return
-		case errors.Is(err, appadmin.ErrAdminPermissionRequired),
-			errors.Is(err, appadmin.ErrOpenWebUIFinancialAuthorityRequired),
-			errors.Is(err, appauth.ErrSub2AuthorityRequired):
+		case errors.Is(err, appadmin.ErrAdminPermissionRequired):
 			response.ErrorFrom(c, http.StatusForbidden, err)
 			return
 		case errors.Is(err, appadmin.ErrOpenWebUIImportFailed):
@@ -295,13 +289,10 @@ func (h *Handler) PatchUser(c *gin.Context) {
 			response.ErrorFrom(c, http.StatusNotFound, err)
 			return
 		case errors.Is(err, appadmin.ErrAdminPermissionRequired),
-			errors.Is(err, appadmin.ErrSuperAdminManagementNotAllowed),
-			errors.Is(err, appauth.ErrSub2AuthorityRequired):
+			errors.Is(err, appadmin.ErrSuperAdminManagementNotAllowed):
 			response.ErrorFrom(c, http.StatusForbidden, err)
 			return
-		case errors.Is(err, appadmin.ErrSub2AuthorityManaged),
-			errors.Is(err, appbilling.ErrSub2AuthorityRequired),
-			errors.Is(err, appadmin.ErrSuperAdminStatusChangeNotAllowed),
+		case errors.Is(err, appadmin.ErrSuperAdminStatusChangeNotAllowed),
 			errors.Is(err, appadmin.ErrLastSuperAdminRoleChangeNotAllowed),
 			errors.Is(err, appadmin.ErrSelfRoleChangeNotAllowed),
 			errors.Is(err, appadmin.ErrSelfStatusChangeNotAllowed):
@@ -1050,10 +1041,6 @@ func (h *Handler) UpdateUserStatus(c *gin.Context) {
 			response.ErrorFrom(c, http.StatusNotFound, err)
 			return
 		}
-		if errors.Is(err, appadmin.ErrSub2AuthorityManaged) {
-			response.ErrorFrom(c, http.StatusConflict, err)
-			return
-		}
 		if errors.Is(err, appadmin.ErrSuperAdminStatusChangeNotAllowed) {
 			response.ErrorFrom(c, http.StatusConflict, err)
 			return
@@ -1124,10 +1111,6 @@ func (h *Handler) ResetUserPassword(c *gin.Context) {
 			response.ErrorFrom(c, http.StatusNotFound, err)
 			return
 		}
-		if errors.Is(err, appadmin.ErrSub2AuthorityManaged) {
-			response.ErrorFrom(c, http.StatusConflict, err)
-			return
-		}
 		if errors.Is(err, appadmin.ErrSuperAdminPasswordResetNotAllowed) {
 			response.ErrorFrom(c, http.StatusConflict, err)
 			return
@@ -1165,10 +1148,6 @@ func (h *Handler) ResetUserTwoFactor(c *gin.Context) {
 	); err != nil {
 		if errors.Is(err, user.ErrUserNotFound) {
 			response.ErrorFrom(c, http.StatusNotFound, err)
-			return
-		}
-		if errors.Is(err, appadmin.ErrSub2AuthorityManaged) {
-			response.ErrorFrom(c, http.StatusConflict, err)
 			return
 		}
 		if errors.Is(err, appadmin.ErrSuperAdminTwoFactorResetNotAllowed) {

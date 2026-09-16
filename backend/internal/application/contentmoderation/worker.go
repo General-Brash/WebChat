@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/textutil"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"strings"
 	"time"
 
 	domaincm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/contentmoderation"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"go.uber.org/zap"
-	"github.com/google/uuid"
 )
 
 type moderationTask struct {
@@ -194,30 +192,18 @@ func (s *Service) executeTask(parent context.Context, task *moderationTask) {
 		stopWorkerCancellation()
 		cancelRun()
 	}()
-	var (
-		resp *Response
-		err  error
-	)
-	trustedProviderCtx, trustErr := prepareModerationProviderContext(runCtx, task)
-	var providerCtx context.Context
-	var cancelProvider context.CancelFunc
-	if trustErr != nil {
-		err = trustErr
-		providerCtx = runCtx
-		cancelProvider = func() {}
-	} else {
-		providerCtx, cancelProvider = context.WithTimeout(trustedProviderCtx, timeout)
-	}
+	providerCtx, cancelProvider := context.WithTimeout(runCtx, timeout)
 
 	selected := task.Selected
 	if len(selected) == 0 {
 		selected = cfg.Policy.CategoriesFor(task.Direction, task.Modality)
 	}
 
-	if trustErr != nil {
-		// Missing or mismatched attribution is fail-closed: do not dispatch the
-		// moderation request on the untrusted run context.
-	} else if s.provider == nil {
+	var (
+		resp *Response
+		err  error
+	)
+	if s.provider == nil {
 		err = ErrModerationService
 	} else {
 		providerConfig := providerConfigFromRuntime(cfg)
@@ -319,62 +305,6 @@ func (s *Service) executeTask(parent context.Context, task *moderationTask) {
 	if lateBlock != nil {
 		s.handleLateBlock(runCtx, task.Coord.meta, *lateBlock)
 	}
-}
-
-func prepareModerationProviderContext(ctx context.Context, task *moderationTask) (context.Context, error) {
-	if task == nil || task.Coord == nil {
-		return ctx, llm.ErrTrustedTriggerRequired
-	}
-	if ctx == nil {
-		return ctx, llm.ErrTrustedTriggerRequired
-	}
-	subject := llm.ExecutionSubjectFromContext(ctx)
-	if !subject.HasTriggerer() && task.Coord.meta.TriggerContext.HasTriggerer() {
-		bound, err := llm.WithTrustedTriggerContext(ctx, task.Coord.meta.TriggerContext)
-		if err != nil {
-			return ctx, err
-		}
-		ctx = bound
-		subject = llm.ExecutionSubjectFromContext(ctx)
-	}
-	if !subject.HasTriggerer() {
-		return ctx, llm.ErrTrustedTriggerRequired
-	}
-	if subject.ResourceOwnerUserID != 0 && task.Coord.meta.UserID != 0 && subject.ResourceOwnerUserID != task.Coord.meta.UserID {
-		return ctx, llm.ErrTrustedTriggerMismatch
-	}
-	seed := strings.Join([]string{
-		"deeix-chat:content-moderation",
-		subject.RunID,
-		subject.ExecutionID,
-		task.Direction,
-		task.Modality,
-		task.Location.Field,
-		task.Location.FileID,
-		strings.Join(task.FileIDs, "\x00"),
-		sha256Hex([]byte(task.Text)),
-	}, "\x00")
-	if strings.TrimSpace(subject.ExecutionID) != "" {
-		childID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(seed)).String()
-		return llm.WithTrustedExecutionChild(ctx, childID)
-	}
-	trigger := subject.TrustedTriggerContext
-	trigger.TriggererUserID = subject.TriggererUserID
-	trigger.ResourceOwnerUserID = task.Coord.meta.UserID
-	if strings.TrimSpace(trigger.Purpose) == "" {
-		trigger.Purpose = "content.moderation"
-	}
-	if strings.TrimSpace(trigger.RunID) == "" {
-		trigger.RunID = strings.TrimSpace(task.Coord.meta.RunID)
-	}
-	if strings.TrimSpace(trigger.RunID) == "" {
-		trigger.RunID = "moderation_" + uuid.NewString()
-	}
-	trigger.ExecutionID = uuid.NewString()
-	if trigger.CreatedAt.IsZero() {
-		trigger.CreatedAt = time.Now().UTC()
-	}
-	return llm.WithTrustedTriggerContext(ctx, trigger)
 }
 
 func contentItemCount(task *moderationTask) int64 {

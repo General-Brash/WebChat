@@ -129,9 +129,6 @@ type requestEmailVerificationCodeInput struct {
 
 // RequestEmailRegistration sends a verification code for a new email account.
 func (s *Service) RequestEmailRegistration(ctx context.Context, email string, turnstileToken string, remoteIP string, requestID string, auditCtx requestmeta.SessionAuditContext) (*EmailRegistrationStartResult, error) {
-	if s.sub2Enabled() {
-		return nil, ErrSub2AuthorityRequired
-	}
 	cfg := s.cfg.Snapshot()
 	if !cfg.EmailLoginEnabled || !cfg.EmailRegistrationEnabled {
 		return nil, ErrEmailRegistrationDisabled
@@ -218,9 +215,6 @@ func (s *Service) RequestEmailRegistration(ctx context.Context, email string, tu
 
 // RegisterWithEmail creates an account after validating the registration code.
 func (s *Service) RegisterWithEmail(ctx context.Context, input RegisterWithEmailInput) (*LoginResult, error) {
-	if s.sub2Enabled() {
-		return nil, ErrSub2AuthorityRequired
-	}
 	cfg := s.cfg.Snapshot()
 	if !cfg.EmailLoginEnabled || !cfg.EmailRegistrationEnabled {
 		return nil, ErrEmailRegistrationDisabled
@@ -333,9 +327,6 @@ func (s *Service) RegisterWithEmail(ctx context.Context, input RegisterWithEmail
 
 // RequestPasswordChangeVerification sends the selected verification code for a password change.
 func (s *Service) RequestPasswordChangeVerification(ctx context.Context, userID uint, requestedMethod string, requestID string, auditCtx requestmeta.SessionAuditContext) (*PasswordChangeVerificationStartResult, error) {
-	if s.sub2Enabled() {
-		return nil, ErrSub2AuthorityRequired
-	}
 	item, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -427,9 +418,6 @@ func (s *Service) RequestPasswordChangeVerification(ctx context.Context, userID 
 
 // ChangePassword validates the current security requirements and changes the password.
 func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput) error {
-	if s.sub2Enabled() {
-		return ErrSub2AuthorityRequired
-	}
 	normalizedPassword, err := userapp.NormalizePassword(input.NewPassword)
 	if err != nil {
 		return err
@@ -517,9 +505,6 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 
 // RequestPasswordReset sends a password reset code without revealing account existence.
 func (s *Service) RequestPasswordReset(ctx context.Context, email string, requestID string, auditCtx requestmeta.SessionAuditContext) (*PasswordResetStartResult, error) {
-	if s.sub2Enabled() {
-		return nil, ErrSub2AuthorityRequired
-	}
 	cfg := s.cfg.Snapshot()
 	normalizedEmail, err := normalizeRegistrationEmail(email)
 	if err != nil {
@@ -616,9 +601,6 @@ func (s *Service) RequestPasswordReset(ctx context.Context, email string, reques
 
 // CompletePasswordReset verifies a reset code and sets the new password.
 func (s *Service) CompletePasswordReset(ctx context.Context, email string, code string, newPassword string, requestID string, auditCtx requestmeta.SessionAuditContext) error {
-	if s.sub2Enabled() {
-		return ErrSub2AuthorityRequired
-	}
 	cfg := s.cfg.Snapshot()
 	normalizedEmail, err := normalizeRegistrationEmail(email)
 	if err != nil {

@@ -336,9 +336,7 @@
       "regenerateRecoveryCodesFailed": "重新生成恢复码失败",
       "providerUnavailable": "该身份源暂不可绑定",
       "bindIdentityFailed": "绑定身份源失败"
-    },
-    "sub2Managed": "前往 Sub2 管理",
-    "sub2ManagedDescription": "认证安全由 Sub2 账号权威管理。"
+    }
   },
   "chatPage": {
     "defaultModel": {

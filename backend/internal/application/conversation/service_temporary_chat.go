@@ -25,12 +25,10 @@ type TemporaryChatMessage struct {
 
 // TemporaryChatInput 描述不创建会话、消息和运行记录的临时推理请求。
 type TemporaryChatInput struct {
-	UserID      uint
-	RequestID   string
-	SessionID   string
-	ClientRunID string
-	// TriggerContext is server-owned; UserID remains the temporary resource owner.
-	TriggerContext           *llm.TrustedTriggerContext `json:"-"`
+	UserID                   uint
+	RequestID                string
+	SessionID                string
+	ClientRunID              string
 	Model                    string
 	Options                  map[string]any
 	SelectedToolIDs          []uint
@@ -59,40 +57,12 @@ func (s *Service) StreamTemporaryChat(
 		return nil, ErrModelRouteNotConfigured
 	}
 
-	// Temporary requests do not create a durable run row, so bind the verified
-	// actor and stable client run before attachment processing or any LLM call.
-	runID := strings.TrimSpace(input.ClientRunID)
-	if runID == "" {
-		return nil, ErrInvalidMessageContent
-	}
-	input.ClientRunID = runID
-	ctx, trustedTrigger, err := establishTrustedOperation(
-		ctx,
-		input.TriggerContext,
-		input.UserID,
-		trustedPurposeChatMain,
-		runID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	ctx, trustedTrigger, err = prepareTrustedProviderRoot(
-		ctx,
-		trustedTrigger,
-		input.UserID,
-		trustedPurposeChatMain,
-		runID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	input.TriggerContext = &trustedTrigger
 	startedAt := time.Now()
 	route, err := s.routeResolver.ResolveRoute(ctx, channel.ResolveRouteInput{
 		PlatformModelName: strings.TrimSpace(input.Model),
 		TaskType:          channel.TaskTypeChat,
 		Scope:             channel.RouteScopeUser,
-		UserID:            trustedTrigger.TriggererUserID,
+		UserID:            input.UserID,
 		RequestID:         strings.TrimSpace(input.RequestID),
 	})
 	if err != nil {
@@ -102,6 +72,7 @@ func (s *Service) StreamTemporaryChat(
 	routeConfig := messageRouteConfig(route, attributionReferer, attributionTitle)
 
 	cfg := s.cfg.Snapshot()
+	runID := strings.TrimSpace(input.ClientRunID)
 	lastUser := input.Messages[len(input.Messages)-1]
 	temporaryAssistant := model.Message{
 		PublicID:    uuid.NewString(),
@@ -179,7 +150,7 @@ func (s *Service) StreamTemporaryChat(
 	if s.moderationSvc != nil {
 		moderationCoord = s.moderationSvc.BeginRun(ctx, appcm.RunMeta{
 			UserID:          input.UserID,
-			RunID:           runID,
+			RunID:           strings.TrimSpace(input.ClientRunID),
 			MessagePublicID: uuid.NewString(),
 			Ephemeral:       true,
 		})
@@ -192,13 +163,11 @@ func (s *Service) StreamTemporaryChat(
 		}
 	}
 	generateInput := llm.GenerateInput{
-		UserID: input.UserID, RunID: runID, ExecutionID: trustedTrigger.ExecutionID,
-		TriggerContext: trustedTriggerContextPointer(ctx),
-		RequestID:      strings.TrimSpace(input.RequestID),
-		Messages:       messages,
-		Tools:          toolRuntime.definitions,
-		Options:        filteredOptions,
-		Ephemeral:      true,
+		RequestID: strings.TrimSpace(input.RequestID),
+		Messages:  messages,
+		Tools:     toolRuntime.definitions,
+		Options:   filteredOptions,
+		Ephemeral: true,
 	}
 	var budgetFit promptBudgetFit
 	generateInput, budgetFit = fitGenerateInputToModelBudget(

@@ -9,7 +9,6 @@ import (
 
 	domaincm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/contentmoderation"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/textutil"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/background"
 	"go.uber.org/zap"
@@ -20,8 +19,6 @@ type RunMeta struct {
 	UserID             uint
 	ConversationID     uint
 	RunID              string
-	// TriggerContext is server-owned operation metadata retained with the coordinator.
-	TriggerContext      llm.TrustedTriggerContext
 	MessageID          uint
 	MessagePublicID    string
 	AssistantMessageID uint

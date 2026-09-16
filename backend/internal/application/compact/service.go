@@ -13,7 +13,6 @@ import (
 	domainconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/textutil"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/tokenestimate"
 	"go.uber.org/zap"
@@ -36,8 +35,6 @@ type MaybeCompactConversationInput struct {
 	ContextModelName    string
 	CapabilitiesJSON    string
 	Force               bool
-	// TriggerContext is server-owned metadata for an optional paid summary call.
-	TriggerContext      *llm.TrustedTriggerContext `json:"-"`
 }
 
 type compactionSummaryInput struct {
@@ -129,11 +126,6 @@ func (s *Service) MaybeCompactConversation(
 	if s == nil || s.repo == nil {
 		return nil, nil
 	}
-	boundCtx, bindErr := bindCompactionTriggerContext(ctx, input.TriggerContext)
-	if bindErr != nil {
-		return nil, bindErr
-	}
-	ctx = boundCtx
 	lock := &s.compactionLocks[input.ConversationID%uint(len(s.compactionLocks))]
 	lock.Lock()
 	defer lock.Unlock()
@@ -436,31 +428,6 @@ func (s *Service) GetSnapshotByRunID(ctx context.Context, runID string) (*domain
 // buildCompactionSummary 使用 3 级回退链生成压缩摘要：
 //
 //	Level 3 (LLM 全量) → Level 2 (LLM 轻量) → Level 1 (增强模板)
-func bindCompactionTriggerContext(ctx context.Context, provided *llm.TrustedTriggerContext) (context.Context, error) {
-	if ctx == nil {
-		return ctx, llm.ErrTrustedTriggerRequired
-	}
-	if provided == nil {
-		return ctx, nil
-	}
-	subject := llm.ExecutionSubjectFromContext(ctx)
-	if subject.HasTriggerer() {
-		if provided.TriggererUserID != 0 && provided.TriggererUserID != subject.TriggererUserID {
-			return ctx, llm.ErrTrustedTriggerMismatch
-		}
-		if subject.RunID != "" && provided.RunID != "" && subject.RunID != provided.RunID {
-			return ctx, llm.ErrTrustedTriggerMismatch
-		}
-		// A live request may already carry a later child execution. Keep that
-		// exact recovery parent instead of attempting an illegal root restore.
-		return ctx, nil
-	}
-	if !provided.HasTriggerer() {
-		return ctx, llm.ErrTrustedTriggerRequired
-	}
-	return llm.WithTrustedTriggerContext(ctx, *provided)
-}
-
 func (s *Service) buildCompactionSummary(ctx context.Context, input compactionSummaryInput) string {
 	if len(input.Messages) == 0 && strings.TrimSpace(input.PreviousSummary) == "" {
 		return fmt.Sprintf(

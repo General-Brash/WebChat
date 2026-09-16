@@ -205,9 +205,6 @@ type SendMessageInput struct {
 	SourceMessagePublicID   string
 	BranchReason            string
 	Cancelable              bool
-	// TriggerContext is server-owned attribution metadata. UserID remains the
-	// conversation/resource owner; the payer is captured from verified context.
-	TriggerContext *llm.TrustedTriggerContext `json:"-"`
 	// UsageAuthorization 是请求级计费授权；提示词形状确定后据此把预算预留抬高到预估成本。
 	UsageAuthorization *domainbilling.UsageAuthorization
 	// OnEvent 用于向调用方推送中间事件（如 rag_search），流式场景使用。
@@ -230,26 +227,20 @@ type SendMessageResult struct {
 	AssistantMessage    model.Message
 	MetadataRefreshHint string
 	Billable            bool
-	// BillingPending means the provider request may have been accepted, but the
-	// authoritative execution/usage result is not known yet. It must not be
-	// released as an unbilled request or settled from estimates.
-	BillingPending        bool
-	BillingPendingReason  string
-	UpstreamID            uint
-	UpstreamName          string
-	PlatformModelName     string
-	RoutedBindingCode     string
-	UpstreamModelName     string
-	UpstreamProtocol      string
-	ProviderReturnedModel string
-	EffectiveOptions      map[string]any
-	UsageSpeed            string
-	UsageServiceTier      string
-	UsageSource           string
-	RawUsageJSON          string
-	CacheWrite5mTokens    int64
-	CacheWrite1hTokens    int64
-	ServerSideToolUsage   map[string]int64
+	UpstreamID          uint
+	UpstreamName        string
+	PlatformModelName   string
+	RoutedBindingCode   string
+	UpstreamModelName   string
+	UpstreamProtocol    string
+	EffectiveOptions    map[string]any
+	UsageSpeed          string
+	UsageServiceTier    string
+	UsageSource         string
+	RawUsageJSON        string
+	CacheWrite5mTokens  int64
+	CacheWrite1hTokens  int64
+	ServerSideToolUsage map[string]int64
 	// MCPToolUsage 聚合本次运行成功的 MCP 调用计量，供计费台账消费。
 	MCPToolUsage []MCPToolUsageItem
 	// LLMCallCount 是本次运行成功返回的上游 LLM 调用数，工具循环的每次回灌都是一次独立调用；

@@ -33,16 +33,6 @@ const (
 	CodeUpstreamUnavailable      = "upstream.unavailable"
 	CodeUpstreamRateLimited      = "upstream.rate_limited"
 	CodeServiceUnavailable       = "service.unavailable"
-	CodeSub2IntegrationDisabled  = "sub2.integration_disabled"
-	CodeSub2IntegrationNotReady  = "sub2.integration_not_ready"
-	CodeSub2AuthorizationDenied  = "sub2.authorization_denied"
-	CodeSub2AuthorizationState   = "sub2.authorization_state_invalid"
-	CodeSub2IDTokenInvalid       = "sub2.id_token_invalid"
-	CodeSub2IdentityNotLinked    = "sub2.identity_not_linked"
-	CodeSub2IdentityRevoked      = "sub2.identity_revoked"
-	CodeSub2IdentityEpochMismatch = "sub2.identity_epoch_mismatch"
-	CodeSub2IdentityUnavailable  = "sub2.identity_unavailable"
-	CodeSub2BillingRequired      = "sub2.billing_authority_required"
 	CodeInternal                 = "internal.error"
 )
 
@@ -79,16 +69,6 @@ var codeMessages = map[string]string{
 	CodeUpstreamUnavailable:      "upstream service unavailable",
 	CodeUpstreamRateLimited:      "upstream rate limited",
 	CodeServiceUnavailable:       "service unavailable",
-	CodeSub2IntegrationDisabled:   "Sub2 integration is disabled",
-	CodeSub2IntegrationNotReady:   "Sub2 integration is not ready",
-	CodeSub2AuthorizationDenied:   "Sub2 authorization failed",
-	CodeSub2AuthorizationState:    "invalid Sub2 authorization state",
-	CodeSub2IDTokenInvalid:        "invalid Sub2 identity token",
-	CodeSub2IdentityNotLinked:     "Sub2 identity is not linked",
-	CodeSub2IdentityRevoked:       "Sub2 identity is no longer active",
-	CodeSub2IdentityEpochMismatch: "Sub2 identity must be reauthenticated",
-	CodeSub2IdentityUnavailable:   "Sub2 identity authority is unavailable",
-	CodeSub2BillingRequired:       "Sub2 billing authority is required",
 	CodeInternal:                 "internal server error",
 
 	"auth.provider_email_conflict":                  "provider email belongs to another account",

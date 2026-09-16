@@ -390,9 +390,7 @@
         "amount": "金额",
         "total": "总计"
       }
-    },
-    "sub2Pending": "Sub2 结算待核对",
-    "sub2Receipt": "费用以 Sub2 权威流水为准；待核对不表示免费。"
+    }
   },
   "composer": {
     "uploadFile": "上传文件",

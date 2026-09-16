@@ -28,18 +28,7 @@ type Handler struct {
 	logger          *zap.Logger
 }
 
-func writeSub2AuthorityError(c *gin.Context, err error) bool {
-	if !appbilling.IsSub2AuthorityError(err) {
-		return false
-	}
-	response.ErrorFrom(c, http.StatusConflict, err)
-	return true
-}
-
 func writeRedeemCodeError(c *gin.Context, err error) {
-	if writeSub2AuthorityError(c, err) {
-		return
-	}
 	switch {
 	case errors.Is(err, appbilling.ErrInvalidRedemptionCode),
 		errors.Is(err, appbilling.ErrRedemptionCodeUnavailable),
@@ -309,9 +298,6 @@ type settingValidationDetailsResponse struct {
 func (h *Handler) ListPlans(c *gin.Context) {
 	items, err := h.service.ListPlans(c.Request.Context())
 	if err != nil {
-		if writeSub2AuthorityError(c, err) {
-			return
-		}
 		response.InternalError(c)
 		return
 	}
@@ -331,9 +317,6 @@ func (h *Handler) ListPlans(c *gin.Context) {
 func (h *Handler) GetBillingAccount(c *gin.Context) {
 	account, err := h.service.GetBillingAccount(c.Request.Context(), middleware.MustUserID(c))
 	if err != nil {
-		if writeSub2AuthorityError(c, err) {
-			return
-		}
 		response.InternalError(c)
 		return
 	}
@@ -374,9 +357,6 @@ func (h *Handler) UpdateBillingAccountBalance(c *gin.Context) {
 	})
 	if err != nil {
 		switch {
-		case appbilling.IsSub2AuthorityError(err):
-			response.ErrorFrom(c, http.StatusConflict, err)
-			return
 		case errors.Is(err, appbilling.ErrInvalidBillingAccountBalance),
 			errors.Is(err, appbilling.ErrPaymentRequired):
 			response.ErrorFrom(c, http.StatusBadRequest, err)
@@ -426,9 +406,6 @@ func (h *Handler) ListRedemptionCodes(c *gin.Context) {
 		PageSize:     pageSize,
 	})
 	if err != nil {
-		if writeSub2AuthorityError(c, err) {
-			return
-		}
 		response.InternalError(c)
 		return
 	}
@@ -669,10 +646,6 @@ func (h *Handler) BatchDeleteRedemptionCodes(c *gin.Context) {
 		return
 	}
 	result := h.service.BatchDeleteRedemptionCodes(c.Request.Context(), req.IDs)
-	if result.AuthorityRequired {
-		writeSub2AuthorityError(c, appbilling.ErrSub2AuthorityRequired)
-		return
-	}
 	actorUserID := middleware.MustUserID(c)
 	h.recordAudit(
 		c,
@@ -785,9 +758,6 @@ func (h *Handler) UpdatePlan(c *gin.Context) {
 
 	item, err := h.service.UpdatePlan(c.Request.Context(), uint(planID), planUpdateInputFromRequest(req))
 	if err != nil {
-		if writeSub2AuthorityError(c, err) {
-			return
-		}
 		if errors.Is(err, appbilling.ErrInvalidPermissionGroup) || errors.Is(err, appbilling.ErrInvalidBillingPlan) {
 			response.ErrorFrom(c, http.StatusBadRequest, err)
 			return
@@ -843,9 +813,6 @@ func (h *Handler) Subscribe(c *gin.Context) {
 	cycles := optionalIntValue(req.Cycles)
 	item, err := h.service.Subscribe(c.Request.Context(), userID, req.PriceID, cycles)
 	if err != nil {
-		if writeSub2AuthorityError(c, err) {
-			return
-		}
 		switch {
 		case errors.Is(err, appbilling.ErrPaymentRequired),
 			errors.Is(err, appbilling.ErrSubscriptionEntitlementActive),

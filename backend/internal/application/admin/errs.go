@@ -3,8 +3,6 @@ package admin
 import "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/apperr"
 
 var (
-	// ErrSub2AuthorityManaged marks role/status/password/2FA fields owned by Sub2.
-	ErrSub2AuthorityManaged = apperr.New("auth.sub2_authority_required", "this account is managed by Sub2")
 	// ErrInvalidUserEmail 非法用户邮箱。
 	ErrInvalidUserEmail = apperr.New("user.invalid_email", "invalid user email")
 	// ErrInvalidUserPhone 非法用户手机号。
@@ -45,9 +43,6 @@ var (
 	ErrInvalidImportMultiplier = apperr.New("request.invalid_import_credit_multiplier", "invalid import credit multiplier")
 	// ErrOpenWebUIImportFailed 表示 OpenWebUI 导入失败。
 	ErrOpenWebUIImportFailed = apperr.NewMasked("internal.error", "internal server error", "openwebui import failed")
-	// ErrOpenWebUIFinancialAuthorityRequired prevents importing an external
-	// balance into Chat's local wallet while Sub2 owns financial effects.
-	ErrOpenWebUIFinancialAuthorityRequired = apperr.New("sub2.billing_authority_required", "OpenWebUI balance import is disabled in Sub2 authority mode")
 	// ErrPermissionGroupRepoUnavailable 表示权限组仓储未注入。
 	ErrPermissionGroupRepoUnavailable = apperr.NewMasked("internal.error", "internal server error", "permission group repo unavailable")
 	// ErrPermissionGroupNotFound 表示权限组不存在。

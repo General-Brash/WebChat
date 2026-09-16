@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	authorityllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"strings"
 	"time"
 
@@ -121,40 +120,6 @@ func (s *Service) UpsertUserMemoryEmbedding(ctx context.Context, userID uint, me
 	return s.repo.UpsertUserMemoryEmbedding(ctx, userID, memoryKey, expectedValue, embedding, embeddingSignature)
 }
 
-func prepareMemoryEmbeddingContext(ctx context.Context, resourceOwnerUserID uint, memoryKey string) (context.Context, error) {
-	if ctx == nil {
-		return ctx, authorityllm.ErrTrustedTriggerRequired
-	}
-	subject := authorityllm.ExecutionSubjectFromContext(ctx)
-	if !subject.HasTriggerer() {
-		return ctx, authorityllm.ErrTrustedTriggerRequired
-	}
-	if subject.ResourceOwnerUserID != 0 && resourceOwnerUserID != 0 && subject.ResourceOwnerUserID != resourceOwnerUserID {
-		return ctx, authorityllm.ErrTrustedTriggerMismatch
-	}
-	if strings.TrimSpace(subject.ExecutionID) != "" {
-		childID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(strings.Join([]string{
-			"deeix-chat:memory-embedding",
-			subject.RunID,
-			subject.ExecutionID,
-			strings.TrimSpace(memoryKey),
-		}, "\x00"))).String()
-		return authorityllm.WithTrustedExecutionChild(ctx, childID)
-	}
-	trigger := subject.TrustedTriggerContext
-	trigger.TriggererUserID = subject.TriggererUserID
-	trigger.ResourceOwnerUserID = resourceOwnerUserID
-	trigger.Purpose = "memory.embedding"
-	if strings.TrimSpace(trigger.RunID) == "" {
-		trigger.RunID = "memory_" + uuid.NewString()
-	}
-	trigger.ExecutionID = uuid.NewString()
-	if trigger.CreatedAt.IsZero() {
-		trigger.CreatedAt = time.Now().UTC()
-	}
-	return authorityllm.WithTrustedTriggerContext(ctx, trigger)
-}
-
 func (s *Service) embedUserMemoryAsync(parent context.Context, userID uint, memoryKey string, value string) {
 	if s.embedding == nil || strings.TrimSpace(memoryKey) == "" || strings.TrimSpace(value) == "" {
 		return
@@ -163,14 +128,10 @@ func (s *Service) embedUserMemoryAsync(parent context.Context, userID uint, memo
 		// 记忆向量是检索增强，不属于写入主事务；失败时保留文本记忆并走关键词兜底。
 		ctx, cancel := background.WithTimeout(parent, 20*time.Second)
 		defer cancel()
-		providerCtx, err := prepareMemoryEmbeddingContext(ctx, userID, memoryKey)
-		if err != nil {
-			return
-		}
-		embeddings, embeddingSignature, err := s.embedding.EmbedTextsWithSignature(providerCtx, []string{value})
+		embeddings, embeddingSignature, err := s.embedding.EmbedTextsWithSignature(ctx, []string{value})
 		if err != nil || len(embeddings) == 0 {
 			return
 		}
-		_ = s.repo.UpsertUserMemoryEmbedding(providerCtx, userID, memoryKey, strings.TrimSpace(value), embeddings[0], embeddingSignature)
+		_ = s.repo.UpsertUserMemoryEmbedding(ctx, userID, memoryKey, strings.TrimSpace(value), embeddings[0], embeddingSignature)
 	})
 }

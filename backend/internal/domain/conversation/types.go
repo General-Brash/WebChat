@@ -253,56 +253,46 @@ type Attachment struct {
 
 // FileObject 表示文件对象。
 type FileObject struct {
-	ID     uint
-	FileID string
-	UserID uint
-	// Processing* fields carry the trusted operation that created the current
-	// processing task. UserID remains the file access/storage owner and is never
-	// a payer fallback.
-	ProcessingTriggererUserID     uint
-	ProcessingResourceOwnerUserID uint
-	ProcessingPurpose             string
-	ProcessingRunID               string
-	ProcessingExecutionID         string
-	ProcessingParentExecutionID   string
-	ProcessingTriggerCreatedAt    *time.Time
-	Purpose                       string
-	FileName                      string
-	MimeType                      string
-	DetectedMIME                  string
-	FileCategory                  string
-	SizeBytes                     int64
-	SHA256                        string
-	StoragePath                   string
-	Status                        string
-	LastAccessedAt                *time.Time
-	ExpiresAt                     *time.Time
-	ProcessingStatus              string
-	ProcessingReady               bool
-	ProcessingErrorCode           string
-	ProcessingErrorMessage        string
-	ExtractStatus                 string
-	ExtractEngine                 string
-	ExtractStoragePath            string
-	ExtractChars                  int
-	ExtractPages                  int
-	PreviewText                   string
-	OCRUsed                       bool
-	RAGReady                      bool
-	RAGReason                     string
-	EmbedStatus                   string
-	EmbedSignature                string
-	EmbedError                    string
-	PageCount                     int
-	ChunkCount                    int
-	ExtractorVersion              string
-	ExtractedAt                   *time.Time
-	ProcessingPayloadJSON         string
-	ProcessingStartedAt           *time.Time
-	ProcessingCompletedAt         *time.Time
-	RAGOptOut                     bool
-	CreatedAt                     time.Time
-	UpdatedAt                     time.Time
+	ID                     uint
+	FileID                 string
+	UserID                 uint
+	Purpose                string
+	FileName               string
+	MimeType               string
+	DetectedMIME           string
+	FileCategory           string
+	SizeBytes              int64
+	SHA256                 string
+	StoragePath            string
+	Status                 string
+	LastAccessedAt         *time.Time
+	ExpiresAt              *time.Time
+	ProcessingStatus       string
+	ProcessingReady        bool
+	ProcessingErrorCode    string
+	ProcessingErrorMessage string
+	ExtractStatus          string
+	ExtractEngine          string
+	ExtractStoragePath     string
+	ExtractChars           int
+	ExtractPages           int
+	PreviewText            string
+	OCRUsed                bool
+	RAGReady               bool
+	RAGReason              string
+	EmbedStatus            string
+	EmbedSignature         string
+	EmbedError             string
+	PageCount              int
+	ChunkCount             int
+	ExtractorVersion       string
+	ExtractedAt            *time.Time
+	ProcessingPayloadJSON  string
+	ProcessingStartedAt    *time.Time
+	ProcessingCompletedAt  *time.Time
+	RAGOptOut              bool
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
 }
 
 const (
@@ -331,39 +321,32 @@ func IsFileProcessing(file FileObject) bool {
 
 // FileObjectProcessing 表示 file_objects 中的服务端处理状态。
 type FileObjectProcessing struct {
-	ID                  uint
-	FileObjectID        uint
-	UserID              uint
-	TriggererUserID     uint
-	ResourceOwnerUserID uint
-	Purpose             string
-	RunID               string
-	ExecutionID         string
-	ParentExecutionID   string
-	TriggerCreatedAt    *time.Time
-	DetectedMIME        string
-	FileCategory        string
-	ProcessingStatus    string
-	ProcessingReady     bool
-	ExtractStatus       string
-	ExtractEngine       string
-	ExtractStoragePath  string
-	ExtractChars        int
-	ExtractPages        int
-	PageCount           int
-	PreviewText         string
-	OCRUsed             bool
-	RAGReady            bool
-	RAGReason           string
-	ErrorCode           string
-	ErrorMessage        string
-	ExtractorVersion    string
-	PayloadJSON         string
-	StartedAt           *time.Time
-	CompletedAt         *time.Time
-	ExtractedAt         *time.Time
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                 uint
+	FileObjectID       uint
+	UserID             uint
+	DetectedMIME       string
+	FileCategory       string
+	ProcessingStatus   string
+	ProcessingReady    bool
+	ExtractStatus      string
+	ExtractEngine      string
+	ExtractStoragePath string
+	ExtractChars       int
+	ExtractPages       int
+	PageCount          int
+	PreviewText        string
+	OCRUsed            bool
+	RAGReady           bool
+	RAGReason          string
+	ErrorCode          string
+	ErrorMessage       string
+	ExtractorVersion   string
+	PayloadJSON        string
+	StartedAt          *time.Time
+	CompletedAt        *time.Time
+	ExtractedAt        *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // FileChunk 表示文件分片。
@@ -400,18 +383,10 @@ type StorageQuota struct {
 
 // Run 表示对话运行日志。
 type Run struct {
-	ID        uint
-	RunID     string
-	RequestID string
-	UserID    uint
-	// UserID remains the conversation/resource owner. TriggererUserID is the
-	// immutable authenticated actor used by later paid consumers.
-	TriggererUserID          uint
-	ResourceOwnerUserID      uint
-	Purpose                  string
-	ExecutionID              string
-	ParentExecutionID        string
-	TriggerCreatedAt         *time.Time
+	ID                       uint
+	RunID                    string
+	RequestID                string
+	UserID                   uint
 	ConversationID           uint
 	TaskType                 string
 	Endpoint                 string

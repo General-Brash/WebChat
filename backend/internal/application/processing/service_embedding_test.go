@@ -10,7 +10,6 @@ import (
 	memorycache "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/cache/memory"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	infraembedding "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/embedding"
-	portllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/security"
 )
@@ -110,12 +109,11 @@ func (q *selectiveEmbeddingQueue) EnqueueFileEmbedding(
 	fileID string,
 	embeddingSignature string,
 	embeddingHost string,
-	trigger ...portllm.TrustedTriggerContext,
 ) error {
 	if err := q.enqueueErrors[fileID]; err != nil {
 		return err
 	}
-	return q.Cache.EnqueueFileEmbedding(ctx, userID, fileID, embeddingSignature, embeddingHost, trigger...)
+	return q.Cache.EnqueueFileEmbedding(ctx, userID, fileID, embeddingSignature, embeddingHost)
 }
 
 func TestSubmitFileEmbeddingsKeepsPerFileFailuresIsolated(t *testing.T) {

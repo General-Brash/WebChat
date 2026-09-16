@@ -87,11 +87,7 @@
     "verificationMethodUnavailable": "所选验证方式暂不可用。",
     "verificationCodeAttemptsExceeded": "验证码尝试次数过多，请重新获取验证码。",
     "verificationCodeInvalid": "验证码无效或已过期。",
-    "verificationCodeRecent": "验证码刚刚已发送，请稍后再试。",
-    "sub2AuthorityRequired": "该账号及其资金操作由 Sub2 权威管理。"
-  },
-  "sub2": {
-    "billingAuthorityRequired": "该资金操作必须通过 Sub2 权威完成。"
+    "verificationCodeRecent": "验证码刚刚已发送，请稍后再试。"
   },
   "billing": {
     "insufficientBalance": "余额不足。",

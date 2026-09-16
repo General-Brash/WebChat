@@ -120,7 +120,6 @@ type ChannelUpstreamRouteRow struct {
 	RouteHeadersJSON                string
 	BindingCode                     string
 	UpstreamModelName               string
-	UpstreamModelRawJSON            string
 	Weight                          int
 	RoutePriority                   int
 	UpstreamCbFailureThreshold      int
@@ -306,8 +305,6 @@ type UpdateChannelModelInput struct {
 
 // UpdateChannelUpstreamInput 定义上游配置更新字段。
 type UpdateChannelUpstreamInput struct {
-	Kind                 *string
-	Sub2GroupIDsJSON     *string
 	Name                 *string
 	BaseURL              *string
 	Compatible           *string
@@ -349,7 +346,7 @@ type ReplaceChannelPlatformRoutesInput struct {
 
 // IsZero 判断是否没有任何上游配置更新字段。
 func (input UpdateChannelUpstreamInput) IsZero() bool {
-	return input.Kind == nil && input.Sub2GroupIDsJSON == nil && input.Name == nil &&
+	return input.Name == nil &&
 		input.BaseURL == nil &&
 		input.Compatible == nil &&
 		input.ProtocolDefaultsJSON == nil &&

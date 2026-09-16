@@ -15,9 +15,6 @@ type ExecuteToolInput struct {
 	UserID         uint
 	ConversationID uint
 	RequestID      string
-	RunID          string
-	ToolCallID     string
-	MCPServerID    uint
 	ToolName       string
 	ArgumentsJSON  string
 	MCPConfig      *mcp.CallConfig
@@ -41,25 +38,13 @@ func (s *Service) executeToolCall(ctx context.Context, input ExecuteToolInput) (
 		limit = 8
 	}
 
-	toolCtx, trigger, triggerErr := trustedMCPChildContext(
-		ctx,
-		input.RunID,
-		input.ToolCallID,
-		input.MCPServerID,
-		toolName,
-		input.ArgumentsJSON,
-	)
-	if triggerErr != nil {
-		return "", triggerErr
-	}
-	return s.executeWithToolLimiter(toolCtx, limit, func() (string, error) {
-		return s.callMCPWithRetry(toolCtx, *input.MCPConfig, mcp.CallInput{
+	return s.executeWithToolLimiter(ctx, limit, func() (string, error) {
+		return s.callMCPWithRetry(ctx, *input.MCPConfig, mcp.CallInput{
 			ToolName:       toolName,
 			ArgumentsJSON:  strings.TrimSpace(input.ArgumentsJSON),
 			UserID:         input.UserID,
 			ConversationID: input.ConversationID,
 			RequestID:      strings.TrimSpace(input.RequestID),
-			TriggerContext: &trigger,
 		}, cfg.MCPToolRetryCount)
 	})
 }

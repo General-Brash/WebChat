@@ -51,8 +51,7 @@ type UserBillingAccountSnapshot struct {
 
 // Service 封装计费业务能力。
 type Service struct {
-	sub2Usage Sub2UsageAuthority
-	repo      repository.BillingRepository
+	repo repository.BillingRepository
 
 	publicPricingMu               sync.RWMutex
 	publicPricingByModel          map[string]PublicModelPricing
@@ -66,9 +65,6 @@ type Service struct {
 	permissionGroupLookup         permissionGroupLookup
 	permissionGroupPlanCounter    permissionGroupPlanCounter
 	redemptionCodeSecret          string
-	localBillingEnabled           bool
-	billingAuthorityConfigured    bool
-	externalIdentityChecker       externalIdentityChecker
 }
 
 // groupRateMultiplierResolver 提供用户权限组计费倍率查询能力。
@@ -138,21 +134,20 @@ const BilledReasonModerationBlockedUpstreamUsage = "moderation_blocked_upstream_
 
 // UsagePricingInput 定义账单计算入参。
 type UsagePricingInput struct {
-	Authorization         *domainbilling.UsageAuthorization
-	UserID                uint
-	ConversationID        uint
-	PlatformModelName     string
-	RoutedBindingCode     string
-	ProviderProtocol      string
-	UpstreamName          string
-	UpstreamModelName     string
-	ProviderReturnedModel string
-	CacheTimeout          string
-	RequestSpeed          string
-	UsageSpeed            string
-	RequestServiceTier    string
-	UsageServiceTier      string
-	UsageSource           string
+	Authorization      *domainbilling.UsageAuthorization
+	UserID             uint
+	ConversationID     uint
+	PlatformModelName  string
+	RoutedBindingCode  string
+	ProviderProtocol   string
+	UpstreamName       string
+	UpstreamModelName  string
+	CacheTimeout       string
+	RequestSpeed       string
+	UsageSpeed         string
+	RequestServiceTier string
+	UsageServiceTier   string
+	UsageSource        string
 	// BilledReason 说明正常结算之外为何仍计费（如审核拦截后的上游用量），写入账单快照供用户与审计查看。
 	BilledReason        string
 	ServiceOnly         bool
@@ -370,7 +365,7 @@ type BillingAccountBalanceInput struct {
 
 // NewService 创建服务。
 func NewService(repo repository.BillingRepository) *Service {
-	service := &Service{repo: repo, localBillingEnabled: true, billingAuthorityConfigured: true}
+	service := &Service{repo: repo}
 	if counter, ok := repo.(permissionGroupPlanCounter); ok {
 		service.permissionGroupPlanCounter = counter
 	}
@@ -440,9 +435,6 @@ func (s *Service) invalidatePublicModelPricingCache() {
 
 // GetBillingMode 查询当前计费模式。
 func (s *Service) GetBillingMode(ctx context.Context) (string, error) {
-	if s.IsSub2BillingAuthority() {
-		return "sub2", nil
-	}
 	return s.repo.GetBillingMode(ctx)
 }
 
@@ -495,9 +487,6 @@ func nativeToolPricingViews(items []nativetool.PricingDefinition) []NativeToolPr
 
 // ListBillingAccountSnapshots 批量查询用户按量余额。
 func (s *Service) ListBillingAccountSnapshots(ctx context.Context, userIDs []uint) (map[uint]UserBillingAccountSnapshot, error) {
-	if err := s.requireLocalBilling(); err != nil {
-		return nil, err
-	}
 	results := make(map[uint]UserBillingAccountSnapshot, len(userIDs))
 	for _, userID := range userIDs {
 		if userID == 0 {
@@ -586,9 +575,6 @@ func (s *Service) GetCurrentSubscriptionSnapshot(
 	userID uint,
 	now time.Time,
 ) (*UserSubscriptionSnapshot, error) {
-	if err := s.requireLocalBilling(); err != nil {
-		return nil, err
-	}
 	results, err := s.ListCurrentSubscriptionSnapshots(ctx, []uint{userID}, now)
 	if err != nil {
 		return nil, err
@@ -607,9 +593,6 @@ func (s *Service) ListCurrentSubscriptionSnapshots(
 	userIDs []uint,
 	now time.Time,
 ) (map[uint]UserSubscriptionSnapshot, error) {
-	if err := s.requireLocalBilling(); err != nil {
-		return nil, err
-	}
 	results := make(map[uint]UserSubscriptionSnapshot)
 	if len(userIDs) == 0 {
 		return results, nil
@@ -666,9 +649,6 @@ func (s *Service) ListCurrentSubscriptionSnapshots(
 
 // Subscribe 创建用户订阅。
 func (s *Service) Subscribe(ctx context.Context, userID uint, priceID uint, cycles int) (*domainbilling.Subscription, error) {
-	if err := s.requireLocalBilling(); err != nil {
-		return nil, err
-	}
 	if userID == 0 || priceID == 0 {
 		return nil, ErrInvalidBillingPlan
 	}
@@ -755,9 +735,6 @@ func (s *Service) SetUserSubscriptionByPlanCode(
 	planCode string,
 	expiresAt *time.Time,
 ) (*UserSubscriptionSnapshot, error) {
-	if err := s.requireLocalBilling(); err != nil {
-		return nil, err
-	}
 	if userID == 0 {
 		return nil, repository.ErrInvalidInput
 	}
@@ -834,9 +811,6 @@ func (s *Service) SetUserSubscriptionByPlanCode(
 
 // CreatePaymentOrder 创建待支付订单。
 func (s *Service) CreatePaymentOrder(ctx context.Context, input PaymentOrderInput) (*domainbilling.PaymentOrder, *domainbilling.Plan, *domainbilling.Price, error) {
-	if err := s.requireLocalBilling(); err != nil {
-		return nil, nil, nil, err
-	}
 	mode, err := s.repo.GetBillingMode(ctx)
 	if err != nil {
 		return nil, nil, nil, err
@@ -940,9 +914,6 @@ func (s *Service) CreatePaymentOrder(ctx context.Context, input PaymentOrderInpu
 
 // CreateTopUpPaymentOrder 创建按量余额充值支付单。
 func (s *Service) CreateTopUpPaymentOrder(ctx context.Context, input TopUpPaymentOrderInput) (*domainbilling.PaymentOrder, error) {
-	if err := s.requireLocalBilling(); err != nil {
-		return nil, err
-	}
 	mode, err := s.repo.GetBillingMode(ctx)
 	if err != nil {
 		return nil, err
@@ -1028,17 +999,11 @@ func (s *Service) CreateTopUpPaymentOrder(ctx context.Context, input TopUpPaymen
 
 // AttachPaymentCheckout 保存外部收银台信息。
 func (s *Service) AttachPaymentCheckout(ctx context.Context, orderNo string, externalCheckoutID string, checkoutURL string) error {
-	if err := s.requireLocalBilling(); err != nil {
-		return err
-	}
 	return s.repo.UpdatePaymentOrderCheckout(ctx, orderNo, externalCheckoutID, checkoutURL)
 }
 
 // GetPaymentOrder 查询支付单。
 func (s *Service) GetPaymentOrder(ctx context.Context, orderNo string) (*domainbilling.PaymentOrder, error) {
-	if err := s.requireLocalBilling(); err != nil {
-		return nil, err
-	}
 	order, err := s.repo.GetPaymentOrderByOrderNo(ctx, orderNo)
 	if errors.Is(err, repository.ErrNotFound) {
 		return nil, ErrPaymentOrderNotFound
@@ -1051,9 +1016,6 @@ func (s *Service) GetPaymentOrder(ctx context.Context, orderNo string) (*domainb
 
 // CompletePaymentOrder 支付成功后开通订阅。
 func (s *Service) CompletePaymentOrder(ctx context.Context, orderNo string, externalPaymentID string, paidAt time.Time) (*domainbilling.PaymentOrder, bool, error) {
-	if err := s.requireLocalBilling(); err != nil {
-		return nil, false, err
-	}
 	order, err := s.repo.GetPaymentOrderByOrderNo(ctx, orderNo)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -1105,9 +1067,6 @@ func (s *Service) CompletePaymentOrder(ctx context.Context, orderNo string, exte
 
 // UpdatePlan 保存周期套餐与默认价格。
 func (s *Service) UpdatePlan(ctx context.Context, planID uint, input PlanUpdateInput) (*BillingPlanView, error) {
-	if err := s.requireLocalBilling(); err != nil {
-		return nil, err
-	}
 	if planID == 0 {
 		return nil, ErrInvalidBillingPlan
 	}
@@ -1220,15 +1179,6 @@ func (s *Service) RecordUsageWithAuthorization(ctx context.Context, usage *domai
 	if usage == nil {
 		return nil
 	}
-	if err := s.checkExternalIdentity(ctx, usage.UserID); err != nil {
-		return err
-	}
-	if !s.localBillingAllowed() {
-		if s.sub2Usage == nil || authorization == nil || authorization.Mode != "sub2" {
-			return ErrSub2AuthorityRequired
-		}
-		return s.sub2Usage.RecordSub2Usage(ctx, usage, authorization)
-	}
 	mode := ""
 	var reservation *domainbilling.UsageBalanceReservation
 	if authorization != nil {
@@ -1296,15 +1246,6 @@ func (s *Service) RecordUsageWithAuthorization(ctx context.Context, usage *domai
 
 // AuthorizeUsage 固定请求开始时的计费模式，并为付费调用原子预留预算。
 func (s *Service) AuthorizeUsage(ctx context.Context, userID uint, platformModelName string, refNo string) (*domainbilling.UsageAuthorization, error) {
-	if err := s.checkExternalIdentity(ctx, userID); err != nil {
-		return nil, err
-	}
-	if !s.localBillingAllowed() {
-		if s.sub2Usage == nil {
-			return nil, ErrSub2AuthorityRequired
-		}
-		return s.sub2Usage.AuthorizeSub2Usage(ctx, userID, platformModelName, refNo)
-	}
 	mode, err := s.repo.GetBillingMode(ctx)
 	if err != nil {
 		return nil, err
@@ -1409,12 +1350,6 @@ func calcEstimatedTokenNanousd(input UsageEstimateInput, rates usageEstimateToke
 // EstimateUsageNanousd 按模型定价与用户费率估算一次调用的成本，用于在上游调用前校验预算。
 // 与账本使用同一套单价、阶梯、速度档位与权限组倍率；免费模型或未配置价格返回 0。
 func (s *Service) EstimateUsageNanousd(ctx context.Context, userID uint, input UsageEstimateInput) (int64, error) {
-	if err := s.checkExternalIdentity(ctx, userID); err != nil {
-		return 0, err
-	}
-	if !s.localBillingAllowed() && s.sub2Usage != nil {
-		return 0, nil
-	} // Sub2 owns the budget check; no local pre-debit.
 	platformModelName := strings.TrimSpace(input.PlatformModelName)
 	identity, err := s.resolvePlatformModelIdentity(ctx, platformModelName)
 	if err != nil && !errors.Is(err, repository.ErrNotFound) {
@@ -1488,14 +1423,6 @@ func (s *Service) EstimateUsageNanousd(ctx context.Context, userID uint, input U
 // 在产生任何上游费用之前被拒绝。没有预留（self 模式、免费模型）或预留已足够时无操作。
 // 结算按数据库中的预留行进行，授权快照只用于定位预留，因此这里不回写内存中的金额。
 func (s *Service) EnsureUsageAuthorizationBudget(ctx context.Context, authorization *domainbilling.UsageAuthorization, requiredNanousd int64) error {
-	if !s.localBillingAllowed() && s.sub2Usage != nil && authorization != nil && authorization.Mode == "sub2" && authorization.Reservation == nil {
-		// No Chat funds were reserved. Cancellation/reconciliation of actual
-		// execution remains in the authority gateway, never a local refund.
-		return nil
-	}
-	if err := s.requireLocalBilling(); err != nil {
-		return err
-	}
 	if authorization == nil || authorization.Reservation == nil || requiredNanousd <= 0 {
 		return nil
 	}
@@ -1518,14 +1445,6 @@ func (s *Service) EnsureUsageAuthorizationBudget(ctx context.Context, authorizat
 
 // ReleaseUsageAuthorization 在调用未产生可计费用量时释放预算。
 func (s *Service) ReleaseUsageAuthorization(ctx context.Context, authorization *domainbilling.UsageAuthorization) error {
-	if !s.localBillingAllowed() && s.sub2Usage != nil && authorization != nil && authorization.Mode == "sub2" && authorization.Reservation == nil {
-		// No Chat funds were reserved. Cancellation/reconciliation of actual
-		// execution remains in the authority gateway, never a local refund.
-		return nil
-	}
-	if err := s.requireLocalBilling(); err != nil {
-		return err
-	}
 	if authorization == nil || authorization.Reservation == nil {
 		return nil
 	}
@@ -1535,14 +1454,6 @@ func (s *Service) ReleaseUsageAuthorization(ctx context.Context, authorization *
 
 // RenewUsageAuthorization 延长仍在运行的付费调用预算租约。
 func (s *Service) RenewUsageAuthorization(ctx context.Context, authorization *domainbilling.UsageAuthorization) error {
-	if !s.localBillingAllowed() && s.sub2Usage != nil && authorization != nil && authorization.Mode == "sub2" && authorization.Reservation == nil {
-		// No Chat funds were reserved. Cancellation/reconciliation of actual
-		// execution remains in the authority gateway, never a local refund.
-		return s.checkExternalIdentity(ctx, authorization.UserID)
-	}
-	if err := s.requireLocalBilling(); err != nil {
-		return err
-	}
 	if authorization == nil || authorization.Reservation == nil {
 		return nil
 	}
@@ -1552,14 +1463,6 @@ func (s *Service) RenewUsageAuthorization(ctx context.Context, authorization *do
 
 // MarkUsageAuthorizationForReconciliation 保留已产生上游费用但尚未完成账单的预算。
 func (s *Service) MarkUsageAuthorizationForReconciliation(ctx context.Context, authorization *domainbilling.UsageAuthorization, failureCode string) error {
-	if !s.localBillingAllowed() && s.sub2Usage != nil && authorization != nil && authorization.Mode == "sub2" && authorization.Reservation == nil {
-		// No Chat funds were reserved. Cancellation/reconciliation of actual
-		// execution remains in the authority gateway, never a local refund.
-		return nil
-	}
-	if err := s.requireLocalBilling(); err != nil {
-		return err
-	}
 	if authorization == nil || authorization.Reservation == nil {
 		return nil
 	}
@@ -1795,13 +1698,6 @@ func subscriptionEndSortTime(subscription domainbilling.Subscription) time.Time 
 
 // BuildUsageLedger 根据模型单价与用量构建账本记录。
 func (s *Service) BuildUsageLedger(ctx context.Context, input UsagePricingInput) (*domainbilling.UsageLedger, error) {
-	if !s.localBillingAllowed() {
-		if s.sub2Usage == nil {
-			return nil, ErrSub2AuthorityRequired
-		}
-		return s.sub2Usage.BuildSub2UsageLedger(ctx, input)
-	}
-
 	platformModelName := strings.TrimSpace(input.PlatformModelName)
 	providerProtocol := strings.TrimSpace(input.ProviderProtocol)
 	usageSpeed := normalizeUsageSpeed(input.UsageSpeed)
@@ -2033,7 +1929,6 @@ func (s *Service) BuildUsageLedger(ctx context.Context, input UsagePricingInput)
 		BillingEnabled:   nativeToolBillingEnabled,
 		PricingOverrides: nativeToolPricingOverrides,
 		Definitions:      nativeToolDefinitions,
-		RateMultiplier:   rateMultiplier,
 	})
 	if len(nativeToolItems) > 0 {
 		serviceItems = append(serviceItems, nativeToolItems...)
@@ -2049,14 +1944,6 @@ func (s *Service) BuildUsageLedger(ctx context.Context, input UsagePricingInput)
 	// 免费模型仅豁免模型本身费用；MCP 等服务项费用仍需结算。
 	// 结算层会对免费标记整单清零，因此只有整单为 0 才落免费标记。
 	ledgerIsFreeModel := isFreeModel && billedNanousd <= 0
-	pricingVersion := int64(0)
-	playerVersion := int64(0)
-	groupRevision := int64(0)
-	if input.Authorization != nil {
-		pricingVersion = input.Authorization.PricingVersion
-		playerVersion = input.Authorization.PlayerVersion
-		groupRevision = input.Authorization.GroupRevision
-	}
 
 	snapshot := map[string]any{
 		"platform_model_name":                      platformModelName,
@@ -2076,9 +1963,6 @@ func (s *Service) BuildUsageLedger(ctx context.Context, input UsagePricingInput)
 		"fast_mode":                                fastMode,
 		"rate_multiplier":                          billingRateMultiplierValue(rateMultiplier),
 		"billing_mode":                             mode,
-		"pricing_version":                          pricingVersion,
-		"player_version":                           playerVersion,
-		"group_revision":                           groupRevision,
 		"pricing_mode":                             pricingMode,
 		"duration_billable":                        input.DurationBillable,
 		"service_only":                             input.ServiceOnly,
@@ -2114,7 +1998,6 @@ func (s *Service) BuildUsageLedger(ctx context.Context, input UsagePricingInput)
 		"call_billed_nanousd":                      callBilledNanousd,
 		"duration_billed_nanousd":                  durationBilledNanousd,
 		"upstream_usage":                           upstreamUsageSnapshot(input),
-		"provider_returned_model":                  strings.TrimSpace(input.ProviderReturnedModel),
 		"server_side_tool_usage":                   normalizeUsageCountMap(input.ServerSideToolUsage),
 		"native_tool_billing_enabled":              nativeToolBillingEnabled,
 		"native_tool_pricing_source":               nativeToolPricingSourceForSnapshot(nativeToolPricingJSON, nativeToolDefinitions),
@@ -2328,8 +2211,6 @@ func nanousdToUSD(value int64) float64 {
 
 // UpsertModelPricing 保存模型单价。
 func (s *Service) UpsertModelPricing(ctx context.Context, input ModelPricingInput) (*ModelPricingView, error) {
-	// Retail configuration is Chat-owned even when money is Sub2-owned.
-	// Saving this draft does not publish it or perform a settlement.
 	platformModelName := strings.TrimSpace(input.PlatformModelName)
 	if platformModelName == "" {
 		return nil, ErrInvalidModelPricing
@@ -3049,17 +2930,11 @@ func (s *Service) GetBillingOverview(ctx context.Context, userID uint, now time.
 
 // GetBillingAccount 查询或创建当前用户按量余额账户。
 func (s *Service) GetBillingAccount(ctx context.Context, userID uint) (*domainbilling.BillingAccount, error) {
-	if err := s.requireLocalBilling(); err != nil {
-		return nil, err
-	}
 	return s.repo.GetOrCreateBillingAccount(ctx, userID)
 }
 
 // SetBillingAccountBalance 管理员设置用户按量余额。
 func (s *Service) SetBillingAccountBalance(ctx context.Context, input BillingAccountBalanceInput) (*domainbilling.BillingAccount, error) {
-	if err := s.requireLocalBilling(); err != nil {
-		return nil, err
-	}
 	if input.UserID == 0 || input.BalanceUSD < 0 || math.IsNaN(input.BalanceUSD) || math.IsInf(input.BalanceUSD, 0) {
 		return nil, ErrInvalidBillingAccountBalance
 	}
@@ -3494,7 +3369,6 @@ type nativeToolServiceItemsInput struct {
 	BillingEnabled   bool
 	PricingOverrides map[string]nativetool.PricingOverride
 	Definitions      []nativetool.Definition
-	RateMultiplier   billingRateMultiplier
 }
 
 func buildNativeToolServiceItems(request nativeToolServiceItemsInput) ([]domainbilling.UsageServiceItem, int64) {
@@ -3513,17 +3387,16 @@ func buildNativeToolServiceItems(request nativeToolServiceItemsInput) ([]domainb
 		if !ok || price.NanousdPerCall <= 0 || count <= 0 {
 			continue
 		}
-		discountedPrice := applyRateMultiplier(price.NanousdPerCall, request.RateMultiplier)
-		billed := count * discountedPrice
+		billed := count * price.NanousdPerCall
 		results = append(results, domainbilling.UsageServiceItem{
 			ServiceCode:        nativeToolServiceCode(price.Provider, toolName),
 			ServiceName:        price.ServiceName,
 			PlatformModelName:  strings.TrimSpace(input.PlatformModelName),
 			ProviderProtocol:   strings.TrimSpace(input.ProviderProtocol),
-			RateMultiplier:     billingRateMultiplierValue(request.RateMultiplier),
+			RateMultiplier:     1,
 			PricingMode:        domainbilling.PricingModeCall,
 			CallCount:          count,
-			CallNanousdPerCall: discountedPrice,
+			CallNanousdPerCall: price.NanousdPerCall,
 			CallBilledNanousd:  billed,
 			BilledNanousd:      billed,
 		})

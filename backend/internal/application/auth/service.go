@@ -48,8 +48,6 @@ type Service struct {
 	auditWriter          auditWriter
 	avatarFileValidator  avatarFileValidator
 	providerAuthBridge   repository.ProviderAuthBridgeRepository
-	sub2Provider         sub2Provider
-	sub2IdentityRepo     repository.Sub2IdentityRepository
 }
 
 // GeoResolver 解析客户端 IP 的地理与网络归属信息。
@@ -162,9 +160,6 @@ func (s *Service) warn(message string, fields ...zap.Field) {
 
 // EnsureBootstrapSuperAdmin 确保系统至少存在一个 superadmin。
 func (s *Service) EnsureBootstrapSuperAdmin(ctx context.Context) (*BootstrapSuperAdmin, error) {
-	if s.sub2Enabled() {
-		return nil, nil
-	}
 	count, err := s.repo.CountSuperAdmins(ctx)
 	if err != nil {
 		return nil, err
@@ -234,9 +229,6 @@ func (s *Service) Login(
 	requestID string,
 	auditCtx requestmeta.SessionAuditContext,
 ) (*LoginResult, error) {
-	if s.sub2Enabled() {
-		return nil, ErrSub2AuthorityRequired
-	}
 	normalizedAuditCtx := s.resolveSessionAuditContext(ctx, auditCtx)
 	result, err := s.doLogin(ctx, username, password, normalizedAuditCtx)
 	if err != nil {
@@ -543,15 +535,6 @@ func (s *Service) applyCredentialView(view *userview.UserView, item domainuser.U
 	view.PasswordSetAt = credential.PasswordSetAt
 	view.PasswordOrigin = credential.PasswordOrigin
 	view.MustResetPassword = credential.MustResetPassword || isBootstrapSuperAdminAdminCreatedPassword(item, credential)
-	if s.sub2Enabled() {
-		// Sub2 owns authentication and MFA in this mode. Do not expose stale
-		// Chat-local username/password onboarding flags for any trusted role,
-		// including legacy-bound users whose local onboarding timestamp is nil.
-		view.MustResetPassword = false
-		view.InitialUsernameRequired = false
-		view.InitialSecurityRequired = false
-		return
-	}
 	view.InitialUsernameRequired = shouldRequireInitialUsername(item, s.cfg.Snapshot().AdminUsername)
 	view.InitialSecurityRequired = view.MustResetPassword || item.OnboardingCompletedAt == nil
 }
@@ -572,9 +555,6 @@ func (s *Service) CompleteOnboarding(
 	requestID string,
 	auditCtx requestmeta.SessionAuditContext,
 ) (*domainuser.User, bool, error) {
-	if s.sub2Enabled() {
-		return nil, false, ErrSub2AuthorityRequired
-	}
 	item, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
 		return nil, false, err
@@ -1185,22 +1165,6 @@ func (s *Service) Refresh(
 		s.RecordAuthEvent(ctx, repository.AuthEventInput{UserID: claims.UserID, RequestID: requestID, EventType: "token_refresh", Result: "failure", Reason: "user_not_active", ClientIP: normalizedAuditCtx.ClientIP, UserAgent: normalizedAuditCtx.UserAgent})
 		return nil, ErrSessionRevoked
 	}
-	if err = s.CheckExternalIdentity(ctx, userItem.ID); err != nil {
-		s.RecordAuthEvent(ctx, repository.AuthEventInput{UserID: claims.UserID, RequestID: requestID, EventType: "token_refresh", Result: "failure", Reason: "sub2_identity_check_failed", ClientIP: normalizedAuditCtx.ClientIP, UserAgent: normalizedAuditCtx.UserAgent})
-		if errors.Is(err, ErrSub2IdentityRevoked) || errors.Is(err, ErrSub2IdentityEpochMismatch) || errors.Is(err, ErrSub2IdentityNotLinked) {
-			return nil, ErrSessionRevoked
-		}
-		return nil, err
-	}
-	// CheckExternalIdentity may promote or correct a stale local projection.
-	// Never sign the rotated token or build its response from the pre-sync row.
-	userItem, err = s.repo.GetByID(ctx, claims.UserID)
-	if err != nil {
-		return nil, err
-	}
-	if userItem.Status != domainuser.StatusActive {
-		return nil, ErrSessionRevoked
-	}
 
 	now := time.Now()
 	tokenBundle, err := s.buildSessionTokenPair(userItem, claims.SessionID, now)
@@ -1353,12 +1317,6 @@ func (s *Service) ValidateAccessSession(
 	if accessIssuedAt.Add(accessTokenSessionClockSkew).Before(session.CreatedAt) {
 		return ErrSessionRevoked
 	}
-	// Only after the local token/session checks pass do we contact Sub2. This
-	// keeps anonymous/invalid requests cheap while making valid sessions fail
-	// closed when the external authority has revoked or downgraded them.
-	if err := s.CheckExternalIdentity(ctx, userID); err != nil {
-		return err
-	}
 
 	now := time.Now()
 	normalizedAuditCtx := auditCtx.Normalize()
@@ -1371,20 +1329,6 @@ func (s *Service) ValidateAccessSession(
 	}
 
 	return nil
-}
-
-// ResolveAuthoritativeRole returns the current local projection after the
-// session validator has synchronized external authority. Middleware uses this
-// instead of trusting the JWT role claim.
-func (s *Service) ResolveAuthoritativeRole(ctx context.Context, userID uint) (string, error) {
-	item, err := s.repo.GetByID(ctx, userID)
-	if err != nil {
-		return "", err
-	}
-	if item.Status != domainuser.StatusActive || !domainuser.IsAdminRole(item.Role) && item.Role != domainuser.RoleUser {
-		return "", ErrSessionRevoked
-	}
-	return item.Role, nil
 }
 
 // ListCurrentActiveSessions 查询当前用户仍然有效的活跃会话。

@@ -150,7 +150,6 @@ func (s *Service) ResolveRoute(ctx context.Context, input ResolveRouteInput) (*R
 			}
 
 			resolved := buildResolvedRoute(selected.row, selected.apiKey)
-			resolved.UserID = input.UserID
 			resolved.UpstreamProbeGranted = upstreamState == "half_open_granted"
 			resolved.ModelProbeGranted = modelState == "half_open_granted"
 			return resolved, nil
@@ -414,7 +413,6 @@ func buildResolvedRoute(row repository.ChannelUpstreamRouteRow, apiKey string) *
 		ModelCapabilitiesJSON:           strings.TrimSpace(row.ModelCapabilitiesJSON),
 		ModelSystemPrompt:               strings.TrimSpace(row.ModelSystemPrompt),
 		UpstreamModel:                   strings.TrimSpace(row.UpstreamModelName),
-		UpstreamModelRawJSON:            strings.TrimSpace(row.UpstreamModelRawJSON),
 		ReasoningContentPassback:        reasoningContentPassbackRequired(row.Protocol, row.ModelVendor, row.PlatformModelName, row.UpstreamModelName, row.UpstreamName),
 		ReasoningPassbackRequestOptions: reasoningPassbackRequestOptions(row.Protocol, row.ModelVendor, row.PlatformModelName, row.UpstreamModelName, row.UpstreamName),
 		UpstreamCbFailureThreshold:      row.UpstreamCbFailureThreshold,

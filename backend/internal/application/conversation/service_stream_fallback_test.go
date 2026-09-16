@@ -2,7 +2,6 @@ package conversation
 
 import (
 	"errors"
-	"io"
 	"strings"
 	"testing"
 
@@ -60,42 +59,6 @@ func TestGenerationAttemptObservationAllowsFallbackBeforeVisibleEvent(t *testing
 	}
 	if requestCount != 2 {
 		t.Fatalf("expected one fallback request before any observable event, got %d requests", requestCount)
-	}
-}
-
-func TestGenerationAttemptObservationAllowsKnownWrappedRejectionBeforeProviderEffect(t *testing.T) {
-	observation := &generationAttemptObservation{}
-	err := llm.MarkRequestAccepted(&llm.UpstreamError{
-		StatusCode: 400,
-		Message:    "stream is not supported by this model",
-	})
-	if !observation.canRetry(err, shouldFallbackToNonStreaming) {
-		t.Fatal("an explicit pre-execution shape rejection may preserve same-route fallback")
-	}
-}
-
-func TestGenerationAttemptObservationPreventsFallbackAfterProviderEffect(t *testing.T) {
-	observation := &generationAttemptObservation{}
-	observation.markProviderEffect()
-	err := llm.MarkRequestAccepted(&llm.UpstreamError{
-		StatusCode: 400,
-		Message:    "stream is not supported by this model",
-	})
-	if observation.canRetry(err, shouldFallbackToNonStreaming) {
-		t.Fatal("a known shape rejection cannot be retried after a provider effect")
-	}
-}
-
-func TestGenerationAttemptObservationRejectsAcceptedUnknownEffect(t *testing.T) {
-	observation := &generationAttemptObservation{}
-	acceptedErrors := []error{
-		llm.MarkRequestAccepted(io.ErrUnexpectedEOF),
-		llm.MarkRequestAccepted(&llm.UpstreamError{StatusCode: 200, Message: "stream parser failed"}),
-	}
-	for _, err := range acceptedErrors {
-		if observation.canRetry(err, shouldFallbackToNonStreaming) {
-			t.Fatalf("accepted unknown effect must not be treated as a safe retry: %v", err)
-		}
 	}
 }
 

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	auditapp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/audit"
-	authapp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/auth"
 	userapp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/user"
 	domainuser "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/user"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
@@ -58,13 +57,6 @@ func (s *Service) ImportOpenWebUIUsers(
 	if _, err := s.getActorUser(ctx, actorUserID); err != nil {
 		return nil, err
 	}
-	authorityMode, err := s.resolveBillingAuthorityMode(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if strings.EqualFold(strings.TrimSpace(authorityMode), "sub2") {
-		return nil, authapp.ErrSub2AuthorityRequired
-	}
 	if !validCreditMultiplier(input.CreditMultiplier) {
 		return nil, ErrInvalidImportMultiplier
 	}
@@ -98,9 +90,6 @@ func (s *Service) ImportOpenWebUIUsers(
 	}
 
 	candidates, emailKeys := s.buildOpenWebUIImportCandidates(rows, input.CreditMultiplier, result)
-	if err := s.validateOpenWebUIFinancialAuthority(ctx, candidates); err != nil {
-		return nil, err
-	}
 	if len(candidates) == 0 {
 		if !input.DryRun {
 			s.writeOpenWebUIImportAudit(ctx, requestID, actorUserID, ip, userAgent, result)
@@ -183,30 +172,6 @@ func (s *Service) ImportOpenWebUIUsers(
 	result.Imported = len(records)
 	s.writeOpenWebUIImportAudit(ctx, requestID, actorUserID, ip, userAgent, result)
 	return result, nil
-}
-
-func (s *Service) validateOpenWebUIFinancialAuthority(ctx context.Context, candidates []openWebUIImportCandidate) error {
-	needsBalanceWrite := false
-	for _, candidate := range candidates {
-		if candidate.balanceNanousd > 0 {
-			needsBalanceWrite = true
-			break
-		}
-	}
-	if !needsBalanceWrite {
-		return nil
-	}
-	if s.subscriptionResolver == nil {
-		return ErrOpenWebUIFinancialAuthorityRequired
-	}
-	mode, err := s.subscriptionResolver.GetBillingMode(ctx)
-	if err != nil {
-		return err
-	}
-	if strings.EqualFold(strings.TrimSpace(mode), "sub2") {
-		return ErrOpenWebUIFinancialAuthorityRequired
-	}
-	return nil
 }
 
 func (s *Service) buildOpenWebUIImportCandidates(rows []repository.OpenWebUIUserRow, multiplier float64, result *OpenWebUIImportResult) ([]openWebUIImportCandidate, []string) {

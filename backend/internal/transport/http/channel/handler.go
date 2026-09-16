@@ -126,7 +126,6 @@ func (h *Handler) CreateUpstream(c *gin.Context) {
 	}
 
 	item, err := h.service.CreateUpstream(c.Request.Context(), appchannel.CreateUpstreamInput{
-		Kind: req.Kind, Sub2GroupIDs: req.Sub2GroupIDs,
 		Name:                 req.Name,
 		BaseURL:              req.BaseURL,
 		Compatible:           req.Compatible,
@@ -191,7 +190,6 @@ func (h *Handler) UpdateUpstream(c *gin.Context) {
 	}
 
 	item, err := h.service.UpdateUpstream(c.Request.Context(), upstreamID, appchannel.UpdateUpstreamInput{
-		Kind: req.Kind, Sub2GroupIDs: req.Sub2GroupIDs,
 		Name:                 req.Name,
 		BaseURL:              req.BaseURL,
 		Compatible:           req.Compatible,
@@ -1554,8 +1552,6 @@ func (h *Handler) UpdateLLMSetting(c *gin.Context) {
 		switch {
 		case errors.Is(err, appchannel.ErrLLMSettingNotFound):
 			response.ErrorFrom(c, http.StatusNotFound, errSettingNotFound)
-		case errors.Is(err, appchannel.ErrInvalidSub2GroupPriority):
-			response.ErrorFrom(c, http.StatusBadRequest, err)
 		case errors.Is(err, appchannel.ErrInvalidJSONConfig):
 			response.ErrorFrom(c, http.StatusBadRequest, err)
 		default:

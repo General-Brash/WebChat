@@ -2,8 +2,6 @@ package memory
 
 import (
 	"context"
-	"crypto/subtle"
-	"strings"
 	"time"
 
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
@@ -47,34 +45,6 @@ func (c *Cache) ConsumeProviderAuthTransaction(_ context.Context, id string) (*r
 	if time.Now().After(item.expiresAt) {
 		return nil, repository.ErrNotFound
 	}
-	value := item.value
-	return &value, nil
-}
-
-// ConsumeProviderAuthTransactionIfBrowserBindingMatches atomically consumes a
-// transaction only when its stored browser binding hash matches the supplied
-// hash. A mismatch leaves the transaction available for the rightful browser.
-func (c *Cache) ConsumeProviderAuthTransactionIfBrowserBindingMatches(_ context.Context, id string, browserBindingHash string) (*repository.ProviderAuthTransaction, error) {
-	if c == nil || id == "" {
-		return nil, repository.ErrNotFound
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	item, ok := c.providerAuthTransactions[id]
-	if !ok {
-		return nil, repository.ErrNotFound
-	}
-	now := time.Now()
-	if now.After(item.expiresAt) {
-		delete(c.providerAuthTransactions, id)
-		return nil, repository.ErrNotFound
-	}
-	expectedHash := strings.TrimSpace(item.value.BrowserBindingHash)
-	actualHash := strings.TrimSpace(browserBindingHash)
-	if expectedHash == "" || actualHash == "" || subtle.ConstantTimeCompare([]byte(expectedHash), []byte(actualHash)) != 1 {
-		return nil, repository.ErrProviderAuthTransactionBindingMismatch
-	}
-	delete(c.providerAuthTransactions, id)
 	value := item.value
 	return &value, nil
 }

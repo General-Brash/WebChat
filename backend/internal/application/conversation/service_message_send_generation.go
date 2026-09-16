@@ -11,7 +11,6 @@ import (
 	platformtracing "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/observability/tracing"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/traceid"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
@@ -110,15 +109,7 @@ func (s *Service) prepareRouteGeneration(ctx context.Context, input routeGenerat
 		filteredOptions,
 		llmMessages,
 	)
-	executionID := uuid.NewString()
-	if mode == routeGenerationInitial && messageInput.TriggerContext != nil {
-		executionID = strings.TrimSpace(messageInput.TriggerContext.ExecutionID)
-		if executionID == "" {
-			executionID = uuid.NewString()
-		}
-	}
 	generateInput := llm.GenerateInput{
-		UserID: messageInput.UserID, RunID: normalizeRunID(messageInput.ClientRunID), ExecutionID: executionID,
 		RequestID:              strings.TrimSpace(messageInput.RequestID),
 		ConversationID:         messageInput.ConversationID,
 		ConversationPublicID:   strings.TrimSpace(conversation.PublicID),
@@ -127,9 +118,6 @@ func (s *Service) prepareRouteGeneration(ctx context.Context, input routeGenerat
 		Messages:               cloneLLMMessages(llmMessages),
 		Tools:                  gen.tools,
 		Options:                filteredOptions,
-	}
-	if messageInput.UsageAuthorization != nil {
-		generateInput.RunID = messageInput.UsageAuthorization.RefNo
 	}
 	generateInput, budgetFit := fitGenerateInputToModelBudget(
 		generateInput,
@@ -219,16 +207,11 @@ type messageGenerationRunner struct {
 	traceRecorder *messageTraceRecorder
 	// routeConfig 是当前路由的调用配置，路由故障转移时随之更新。
 	routeConfig llm.RouteConfig
-	// trustedContext is the latest server-approved execution context. The first
-	// model call uses the initialized root; every later real call forks a child.
-	trustedContext context.Context
-	trustedTrigger llm.TrustedTriggerContext
-	providerExecutionCalls int
 
 	llmRequestCount       int
 	completedLLMCallCount int
 	upstreamCallStarted   bool
-	// attemptHadSideEffect 表示当前路由上已有 provider effect（包括响应句柄、用量、推理或工具事件）产生，此后不得再切换路由重试。
+	// attemptHadSideEffect 表示当前路由上已有用量、推理或工具事件产生，此后不得再切换路由重试。
 	attemptHadSideEffect        bool
 	visibleDeltaCount           int
 	firstVisibleDeltaLatencyMS  int64
@@ -267,13 +250,6 @@ func (r *messageGenerationRunner) beginRouteFailover(routeConfig llm.RouteConfig
 	r.streamedText.Reset()
 }
 
-func (r *messageGenerationRunner) currentTrustedContext() context.Context {
-	if r == nil {
-		return nil
-	}
-	return r.trustedContext
-}
-
 func (r *messageGenerationRunner) warn(ctx context.Context, event string, route *channel.ResolvedRoute, err error) {
 	if r.service.logger == nil {
 		return
@@ -297,21 +273,8 @@ type generationCall struct {
 	observedServerTools map[string]string
 }
 
-func (c *generationCall) markProviderEffect() {
-	if c == nil {
-		return
-	}
-	if c.runner != nil {
-		c.runner.attemptHadSideEffect = true
-	}
-	if c.observation != nil {
-		c.observation.markProviderEffect()
-	}
-}
-
 func (c *generationCall) emitVisibleDelta(delta string) error {
 	if delta != "" {
-		c.markProviderEffect()
 		c.observation.markObservable()
 	}
 	if err := c.runner.emitVisibleDelta(delta); err != nil {
@@ -327,7 +290,6 @@ func (c *generationCall) finalizeNonStreamingOutput(output *llm.GenerateOutput, 
 	if output == nil {
 		return nil
 	}
-	c.markProviderEffect()
 	r := c.runner
 	if r.traceRecorder != nil && r.traceRecorder.visible() && r.traceRecorder.onEvent != nil &&
 		(output.Reasoning != nil || len(output.ServerToolCalls) > 0) {
@@ -347,12 +309,8 @@ func (c *generationCall) finalizeNonStreamingOutput(output *llm.GenerateOutput, 
 // 并把正文增量路由到可见文本或思考轨迹。
 func (c *generationCall) handleStreamEvent(generationCtx context.Context, currentInput llm.GenerateInput, event llm.GenerateStreamEvent) error {
 	r := c.runner
-	if responseID := strings.TrimSpace(event.ResponseID); responseID != "" {
-		// A response.created handle is provider-side effect even when no text or
-		// usage has arrived yet. Only this attempt's observed handle is evidence;
-		// currentInput.PreviousResponseID is merely an input compatibility token.
-		c.markProviderEffect()
-		if currentInput.ResponsesBackground {
+	if currentInput.ResponsesBackground {
+		if responseID := strings.TrimSpace(event.ResponseID); responseID != "" {
 			r.responsesBackgroundRecovery.ResponseID = responseID
 		}
 	}
@@ -360,7 +318,7 @@ func (c *generationCall) handleStreamEvent(generationCtx context.Context, curren
 		return ErrMessageGenerationCanceled
 	}
 	if event.Usage != (llm.Usage{}) {
-		c.markProviderEffect()
+		r.attemptHadSideEffect = true
 		// 上游流式 usage 通常是“本次 LLM 调用累计值”，但一条消息可能包含多轮 LLM 调用。
 		// 这里先换算成本次调用内增量，再累加成本轮消息总量，保证实时展示和最终账单口径一致。
 		usageDelta := diffLLMUsage(event.Usage, c.streamUsage)
@@ -377,7 +335,7 @@ func (c *generationCall) handleStreamEvent(generationCtx context.Context, curren
 		}
 	}
 	if event.GeneratedImage != nil {
-		c.markProviderEffect()
+		r.attemptHadSideEffect = true
 		if r.input.OnEvent != nil && strings.TrimSpace(event.GeneratedImage.B64JSON) != "" {
 			c.observation.markObservable()
 		}
@@ -385,9 +343,9 @@ func (c *generationCall) handleStreamEvent(generationCtx context.Context, curren
 			return err
 		}
 	}
-	if event.Reasoning != nil {
-		c.markProviderEffect()
-		if event.Reasoning.Text != "" && event.Reasoning.Kind != messageTraceThinkKindSignature {
+	if event.Reasoning != nil && event.Reasoning.Text != "" {
+		r.attemptHadSideEffect = true
+		if event.Reasoning.Kind != messageTraceThinkKindSignature {
 			r.usage.recordCallReasoningText(event.Reasoning.Text)
 		}
 	}
@@ -401,7 +359,7 @@ func (c *generationCall) handleStreamEvent(generationCtx context.Context, curren
 		}
 	}
 	if event.ServerToolCall != nil {
-		c.markProviderEffect()
+		r.attemptHadSideEffect = true
 	}
 	if r.traceRecorder != nil && event.ServerToolCall != nil {
 		if r.traceRecorder.visible() && r.traceRecorder.onEvent != nil {
@@ -421,15 +379,12 @@ func (c *generationCall) handleStreamEvent(generationCtx context.Context, curren
 		}})
 		r.traceRecorder.syncToolSection(summary, markdown, payload, traceStatusFromToolStatus(toolStatus))
 	}
-	if event.Delta != "" {
-		c.markProviderEffect()
-	}
 	if r.onDelta == nil || event.Delta == "" {
 		return nil
 	}
 	visibleDelta, thinkDelta := c.thinkingRouter.consume(event.Delta)
 	if thinkDelta != "" {
-		c.markProviderEffect()
+		r.attemptHadSideEffect = true
 		r.usage.recordCallReasoningText(thinkDelta)
 	}
 	if r.traceRecorder != nil && thinkDelta != "" {
@@ -447,30 +402,6 @@ func (c *generationCall) handleStreamEvent(generationCtx context.Context, curren
 // generate 执行一次上游调用：优先流式，流式不受支持或在产生任何副作用前失败时回退到非流式。
 // fullMessages 是本次调用对应的完整上下文，有状态续传时用于估算上游实际计费的输入规模。
 func (r *messageGenerationRunner) generate(ctx context.Context, currentInput llm.GenerateInput, fullMessages []llm.Message) (*llm.GenerateOutput, error) {
-	parentCtx := r.trustedContext
-	if parentCtx == nil {
-		parentCtx = ctx
-	}
-	if r.providerExecutionCalls > 0 {
-		// The initial plan carries the persisted root ID. Every later real
-		// model call must receive a fresh server-approved child, even when the
-		// caller copied the initial GenerateInput for a tool follow-up or route
-		// failover.
-		currentInput.ExecutionID = uuid.NewString()
-	}
-	executionCtx, trustedTrigger, trustErr := prepareTrustedProviderExecution(
-		parentCtx,
-		&currentInput,
-		r.input.UserID,
-		trustedPurposeChatMain,
-		r.runID,
-	)
-	if trustErr != nil {
-		return nil, trustErr
-	}
-	r.trustedContext = executionCtx
-	r.trustedTrigger = trustedTrigger
-
 	call := &generationCall{
 		runner:              r,
 		observation:         &generationAttemptObservation{},
@@ -487,14 +418,11 @@ func (r *messageGenerationRunner) generate(ctx context.Context, currentInput llm
 	callPromptShape := summarizePromptShape(callPromptMode, currentInput.Messages, currentInput.Messages, currentInput.PreviousResponseID)
 	r.usage.beginCall(estimateBillableInputTokens(currentInput, fullMessages))
 	if currentInput.ResponsesBackground {
-		r.responsesBackgroundRecovery = openAIResponsesBackgroundRecoveryState{
-			Enabled:        true,
-			TriggerContext: r.trustedTrigger,
-		}
+		r.responsesBackgroundRecovery = openAIResponsesBackgroundRecoveryState{Enabled: true}
 	} else {
 		r.responsesBackgroundRecovery = openAIResponsesBackgroundRecoveryState{}
 	}
-	generationCtx, generationSpan := platformtracing.Start(executionCtx, "conversation.llm.generate",
+	generationCtx, generationSpan := platformtracing.Start(ctx, "conversation.llm.generate",
 		trace.WithAttributes(append([]attribute.KeyValue{
 			attribute.Int64("conversation.id", int64(r.input.ConversationID)),
 			attribute.String("llm.model", r.routeConfig.UpstreamModel),
@@ -516,7 +444,6 @@ func (r *messageGenerationRunner) generate(ctx context.Context, currentInput llm
 	if !streamRequested || !streamSupported {
 		r.upstreamCallStarted = true
 		r.llmRequestCount++
-		r.providerExecutionCalls++
 		output, err := r.service.llmClient.Generate(generationCtx, r.routeConfig, currentInput)
 		generateErr = err
 		if err == nil {
@@ -537,21 +464,9 @@ func (r *messageGenerationRunner) generate(ctx context.Context, currentInput llm
 
 	r.upstreamCallStarted = true
 	r.llmRequestCount++
-	r.providerExecutionCalls++
 	output, streamErr := r.service.llmClient.GenerateStream(generationCtx, r.routeConfig, currentInput, func(event llm.GenerateStreamEvent) error {
 		return call.handleStreamEvent(generationCtx, currentInput, event)
 	})
-	// Some adapters can return the current response handle alongside a terminal
-	// parser/transport error without delivering a separate stream event. Treat
-	// that handle exactly like response.created so fallback cannot repost it.
-	if output != nil {
-		if responseID := strings.TrimSpace(output.ResponseID); responseID != "" {
-			call.markProviderEffect()
-			if currentInput.ResponsesBackground {
-				r.responsesBackgroundRecovery.ResponseID = responseID
-			}
-		}
-	}
 	generateErr = streamErr
 	if generateErr == nil {
 		visibleTail, thinkTail := call.thinkingRouter.flush()
@@ -572,25 +487,6 @@ func (r *messageGenerationRunner) generate(ctx context.Context, currentInput llm
 	if !r.attemptHadSideEffect && r.llmRequestCount < r.maxLLMCalls &&
 		call.observation.canRetry(generateErr, shouldFallbackToNonStreaming) {
 		r.llmRequestCount++
-		// The fallback changes the wire request shape. It is a new, safe attempt
-		// only after the streaming attempt was rejected before any observable
-		// side effect, so it must not reuse the prior execution key.
-		currentInput.ExecutionID = uuid.NewString()
-		var fallbackTrigger llm.TrustedTriggerContext
-		var fallbackErr error
-		generationCtx, fallbackTrigger, fallbackErr = prepareTrustedProviderExecution(
-			r.trustedContext,
-			&currentInput,
-			r.input.UserID,
-			trustedPurposeChatMain,
-			r.runID,
-		)
-		if fallbackErr != nil {
-			generateErr = fallbackErr
-			return output, generateErr
-		}
-		r.trustedContext = generationCtx
-		r.trustedTrigger = fallbackTrigger
 		output, generateErr = r.service.llmClient.Generate(generationCtx, r.routeConfig, currentInput)
 		if generateErr == nil {
 			generateErr = call.finalizeNonStreamingOutput(output, true)
@@ -614,7 +510,6 @@ func (r *messageGenerationRunner) runRouteAttempt(ctx context.Context, plan *rou
 	if !r.attemptHadSideEffect && r.llmRequestCount < r.maxLLMCalls && plan.generateInput.ResponsesBackground &&
 		r.lastAttemptObservation.canRetry(attemptErr, shouldRetryWithoutResponsesBackground) {
 		r.warn(ctx, "openai_responses_background_rejected_retry_standard", plan.route, attemptErr)
-		plan.generateInput.ExecutionID = uuid.NewString()
 		plan.generateInput.ResponsesBackground = false
 		r.responsesBackgroundRecovery = openAIResponsesBackgroundRecoveryState{}
 		output, attemptErr = r.generate(ctx, plan.generateInput, plan.fullLLMMessages)
@@ -622,7 +517,6 @@ func (r *messageGenerationRunner) runRouteAttempt(ctx context.Context, plan *rou
 	if !r.attemptHadSideEffect && r.llmRequestCount < r.maxLLMCalls && strings.TrimSpace(plan.generateInput.PreviousResponseID) != "" &&
 		r.lastAttemptObservation.canRetry(attemptErr, shouldRetryWithoutPreviousResponseID) {
 		r.warn(ctx, "previous_response_id_rejected_retry_full_context", plan.route, attemptErr)
-		plan.generateInput.ExecutionID = uuid.NewString()
 		_ = r.service.repo.UpdateConversationLastResponseID(ctx, r.input.ConversationID, "")
 		plan.generateInput.PreviousResponseID = ""
 		plan.generateInput.Messages = plan.fullLLMMessages

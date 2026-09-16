@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"context"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"net/http"
 	"strings"
 	"time"
@@ -23,14 +22,6 @@ type SessionValidator interface {
 		accessIssuedAt time.Time,
 		auditCtx requestmeta.SessionAuditContext,
 	) error
-}
-
-// AuthoritativeRoleResolver lets the auth service replace a stale JWT role
-// after the session has already passed local token/session validation. It is
-// optional so existing validators and test doubles keep satisfying the
-// original SessionValidator contract.
-type AuthoritativeRoleResolver interface {
-	ResolveAuthoritativeRole(ctx context.Context, userID uint) (string, error)
 }
 
 // AuthMiddleware 校验 JWT 并写入用户上下文。
@@ -79,26 +70,9 @@ func AuthMiddleware(jwtSecret string, validator SessionValidator) gin.HandlerFun
 			}
 		}
 
-		role := claims.Role
-		if roleResolver, ok := validator.(AuthoritativeRoleResolver); ok {
-			role, err = roleResolver.ResolveAuthoritativeRole(c.Request.Context(), claims.UserID)
-			if err != nil {
-				response.ErrorFrom(c, http.StatusUnauthorized, errSessionInvalid)
-				c.Abort()
-				return
-			}
-		}
-
-		executionContext, subjectErr := llm.WithAuthenticatedExecutionSubject(c.Request.Context(), claims.UserID, "")
-		if subjectErr != nil {
-			response.ErrorFrom(c, http.StatusUnauthorized, errSessionInvalid)
-			c.Abort()
-			return
-		}
 		c.Set(ContextKeyUserID, claims.UserID)
-		c.Request = c.Request.WithContext(executionContext)
 		c.Set(ContextKeyUsername, claims.Username)
-		c.Set(ContextKeyUserRole, role)
+		c.Set(ContextKeyUserRole, claims.Role)
 		c.Set(ContextKeySessionID, claims.SessionID)
 		c.Next()
 	}

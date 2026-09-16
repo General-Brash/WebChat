@@ -16,7 +16,6 @@ import (
 	domainconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	extractport "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/extract"
-	portllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/objectstore"
 )
 
@@ -89,11 +88,7 @@ type EngineFactories struct {
 
 // ExtractInput 表示单个已存储文件的提取输入。
 type ExtractInput struct {
-	File domainconversation.FileObject
-	// TriggerContext is server-owned metadata restored before any paid OCR or
-	// model-backed extraction. A zero actor intentionally quarantines that
-	// provider path without disabling deterministic local parsing.
-	TriggerContext        *portllm.TrustedTriggerContext `json:"-"`
+	File                  domainconversation.FileObject
 	PDFMaxPages           int
 	OCREngine             string
 	ImageOCREnabled       bool
@@ -134,11 +129,6 @@ func (s *Service) openObjectStore(ctx context.Context) (objectstore.Store, error
 
 // ExtractStoredFile 从已落盘文件中提取文本。
 func (s *Service) ExtractStoredFile(ctx context.Context, input ExtractInput) (Result, error) {
-	bound, err := bindTrustedExtractionContext(ctx, input.TriggerContext)
-	if err != nil {
-		return Result{}, err
-	}
-	ctx = bound
 	store, err := s.openObjectStore(ctx)
 	if err != nil {
 		return Result{}, err
@@ -154,11 +144,6 @@ func (s *Service) ExtractStoredFile(ctx context.Context, input ExtractInput) (Re
 // ExtractTemporaryFile 从系统临时目录内、由调用方管理生命周期的普通文件中提取文本。
 // 该入口不读取或写入对象存储，也不接受任意本地文件路径。
 func (s *Service) ExtractTemporaryFile(ctx context.Context, input ExtractInput) (Result, error) {
-	bound, err := bindTrustedExtractionContext(ctx, input.TriggerContext)
-	if err != nil {
-		return Result{}, err
-	}
-	ctx = bound
 	absPath := filepath.Clean(strings.TrimSpace(input.File.StoragePath))
 	if absPath == "" || !filepath.IsAbs(absPath) {
 		return Result{}, ErrInvalidStoredFilePath
@@ -173,20 +158,6 @@ func (s *Service) ExtractTemporaryFile(ctx context.Context, input ExtractInput) 
 		return Result{}, ErrInvalidStoredFilePath
 	}
 	return s.extractLocalFile(ctx, input, absPath)
-}
-
-func bindTrustedExtractionContext(ctx context.Context, trigger *portllm.TrustedTriggerContext) (context.Context, error) {
-	if trigger == nil {
-		return ctx, nil
-	}
-	if ctx == nil {
-		return ctx, portllm.ErrTrustedTriggerRequired
-	}
-	bound, err := portllm.WithTrustedTriggerContext(ctx, *trigger)
-	if err != nil {
-		return ctx, err
-	}
-	return bound, nil
 }
 
 func (s *Service) extractLocalFile(ctx context.Context, input ExtractInput, absPath string) (result Result, err error) {
@@ -575,11 +546,6 @@ func (s *Service) extractImageWithOCR(ctx context.Context, input ExtractInput) (
 		snapshot = s.cfg.Snapshot()
 	}
 	item := s.resolveOCREngine(snapshot, input.OCREngine)
-	if requiresTrustedOCRProvider(item.provider) {
-		if err := requireTrustedProviderContext(ctx, input.TriggerContext); err != nil {
-			return Result{Engine: ocrEngineName(item.provider), OCRUsed: true}, err
-		}
-	}
 	if !item.Supports(input.File) {
 		return Result{Engine: ocrEngineName(item.provider), OCRUsed: true}, NewOCRError(item.provider, "ocr_unavailable", nil)
 	}
@@ -599,11 +565,6 @@ func (s *Service) extractWithOCRPageRanges(ctx context.Context, input ExtractInp
 		snapshot = s.cfg.Snapshot()
 	}
 	item := s.resolveOCREngine(snapshot, input.OCREngine)
-	if requiresTrustedOCRProvider(item.provider) {
-		if err := requireTrustedProviderContext(ctx, input.TriggerContext); err != nil {
-			return Result{PageCount: pageCount, Engine: ocrEngineName(item.provider), OCRUsed: true}, err
-		}
-	}
 	if !item.Supports(input.File) {
 		return Result{PageCount: pageCount, Engine: ocrEngineName(item.provider), OCRUsed: true}, NewOCRError(item.provider, "ocr_unavailable", nil)
 	}
@@ -616,32 +577,6 @@ func (s *Service) extractWithOCRPageRanges(ctx context.Context, input ExtractInp
 		result.PageCount = pageCount
 	}
 	return result, err
-}
-
-func requiresTrustedOCRProvider(provider string) bool {
-	switch normalizeOCREngine(provider) {
-	case OCREngineTencent, OCREngineAliyun, OCREngineMistral, OCREngineLLM:
-		return true
-	default:
-		return false
-	}
-}
-
-func requireTrustedProviderContext(ctx context.Context, trigger *portllm.TrustedTriggerContext) error {
-	if trigger != nil {
-		if !trigger.HasTriggerer() {
-			return portllm.ErrTrustedTriggerRequired
-		}
-		subject := portllm.ExecutionSubjectFromContext(ctx)
-		if subject.TriggererUserID > 0 && subject.TriggererUserID != trigger.TriggererUserID {
-			return portllm.ErrTrustedTriggerMismatch
-		}
-		return nil
-	}
-	if !portllm.ExecutionSubjectFromContext(ctx).HasTriggerer() {
-		return portllm.ErrTrustedTriggerRequired
-	}
-	return nil
 }
 
 func primaryEngineName(item engine) string {
@@ -741,9 +676,6 @@ func (e tikaEngine) Supports(file domainconversation.FileObject) bool {
 }
 
 func (e tikaEngine) Extract(ctx context.Context, input ExtractInput) (Result, error) {
-	if err := requireTrustedProviderContext(ctx, input.TriggerContext); err != nil {
-		return Result{}, err
-	}
 	if e.client == nil {
 		return Result{}, NewError("tika_disabled", errors.New("tika is disabled"))
 	}
@@ -783,9 +715,6 @@ func (e documentParserEngine) Supports(file domainconversation.FileObject) bool 
 }
 
 func (e documentParserEngine) Extract(ctx context.Context, input ExtractInput) (Result, error) {
-	if err := requireTrustedProviderContext(ctx, input.TriggerContext); err != nil {
-		return Result{Engine: e.name}, err
-	}
 	if e.extract == nil {
 		return Result{Engine: e.name}, fmt.Errorf("%s_unavailable", e.name)
 	}

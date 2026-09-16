@@ -1,7 +1,5 @@
 "use client";
 
-import { Sub2FinancePanel } from "@/features/sub2/finance-panel";
-import { useSub2Authority } from "@/features/sub2/use-sub2";
 import { Separator } from "@/components/ui/separator";
 import { BillingConfigSection } from "@/features/admin/components/sections/billing/billing-config";
 import { BillingMCPToolsSection } from "@/features/admin/components/sections/billing/billing-mcp-tools";
@@ -13,12 +11,10 @@ import { useAdminBillingReference } from "@/features/admin/hooks/use-admin-billi
 
 export function AdminBillingPage() {
   const billing = useAdminBillingReference();
-  const authority = useSub2Authority();
   const billingMode = billing.billingConfig?.mode ?? "self";
 
   return (
     <div className="space-y-8 pb-10">
-      {authority.status?.enabled ? <Sub2FinancePanel admin status={authority.status} /> : <>
       <BillingConfigSection
         billingConfig={billing.billingConfig}
         setBillingConfig={billing.setBillingConfig}
@@ -50,7 +46,6 @@ export function AdminBillingPage() {
 
       <Separator className="mx-1 my-10" />
 
-      </>}
       <BillingPricesSection
         models={billing.models}
         pricingItems={billing.pricingItems}

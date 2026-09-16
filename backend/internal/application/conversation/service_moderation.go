@@ -17,7 +17,6 @@ import (
 	domainbilling "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/billing"
 	model "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/objectstore"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 )
 
 const moderationFinalizationTimeout = 65 * time.Second
@@ -128,13 +127,6 @@ func (s *Service) SetModerationService(svc *appcm.Service) {
 	svc.SetFileAccessController(&moderationFileAccessAdapter{service: s})
 }
 
-func trustedTriggerValue(trigger *llm.TrustedTriggerContext) llm.TrustedTriggerContext {
-	if trigger == nil {
-		return llm.TrustedTriggerContext{}
-	}
-	return *trigger
-}
-
 // startModerationRun begins per-turn moderation when policy is enabled.
 // Live events use the existing OnEvent path (set by HTTP handlers) — no side channel.
 func (s *Service) startModerationRun(
@@ -151,7 +143,6 @@ func (s *Service) startModerationRun(
 		UserID:             input.UserID,
 		ConversationID:     input.ConversationID,
 		RunID:              runID,
-		TriggerContext:     trustedTriggerValue(input.TriggerContext),
 		MessageID:          userMessage.ID,
 		MessagePublicID:    userMessage.PublicID,
 		UserMessageID:      userMessage.ID,

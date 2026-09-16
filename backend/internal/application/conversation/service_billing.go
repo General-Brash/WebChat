@@ -35,9 +35,7 @@ type SendMessageBillingInput struct {
 	PlatformModelName string
 	ConversationModel string
 	ClientRunID       string
-	// TriggerContext is server-owned; UserID remains the resource owner.
-	TriggerContext *llm.TrustedTriggerContext `json:"-"`
-	Result         *SendMessageResult
+	Result            *SendMessageResult
 }
 
 // SendMessageAuditInput 描述一次消息发送对应的审计上下文。
@@ -79,13 +77,9 @@ func (s *Service) UpdateMessageBilling(ctx context.Context, messageID uint, usag
 // AuthorizeSendMessageUsage 在模型调用前固定计费策略并预留可用预算。
 func (s *Service) AuthorizeSendMessageUsage(ctx context.Context, input SendMessageBillingInput) (*domainbilling.UsageAuthorization, error) {
 	if s.billingSvc == nil {
-		return &domainbilling.UsageAuthorization{Mode: "self", UserID: input.UserID}, nil
+		return &domainbilling.UsageAuthorization{Mode: "self"}, nil
 	}
-	triggererUserID, err := canonicalTriggererUserID(ctx, input.TriggerContext)
-	if err != nil {
-		return nil, err
-	}
-	return s.billingSvc.AuthorizeUsage(ctx, triggererUserID, sendMessageBillingPlatformModelName(input), strings.TrimSpace(input.ClientRunID))
+	return s.billingSvc.AuthorizeUsage(ctx, input.UserID, sendMessageBillingPlatformModelName(input), strings.TrimSpace(input.ClientRunID))
 }
 
 // PersistMessageUsageRejection 将需要进入对话历史的终态业务拒绝持久化。
@@ -406,44 +400,39 @@ func (s *Service) buildSendMessageUsageLedger(ctx context.Context, input SendMes
 	if latencyMS <= 0 {
 		latencyMS = result.AssistantMessage.LatencyMS
 	}
-	triggererUserID, err := canonicalTriggererUserID(ctx, input.TriggerContext)
-	if err != nil {
-		return nil, err
-	}
 	return s.billingSvc.BuildUsageLedger(ctx, appbilling.UsagePricingInput{
-		Authorization:         authorization,
-		UserID:                triggererUserID,
-		ConversationID:        input.ConversationID,
-		PlatformModelName:     sendMessageBillingPlatformModelName(input),
-		RoutedBindingCode:     strings.TrimSpace(result.RoutedBindingCode),
-		ProviderProtocol:      strings.TrimSpace(result.UpstreamProtocol),
-		UpstreamName:          strings.TrimSpace(result.UpstreamName),
-		UpstreamModelName:     strings.TrimSpace(result.UpstreamModelName),
-		ProviderReturnedModel: strings.TrimSpace(result.ProviderReturnedModel),
-		CacheTimeout:          messageCacheTimeout(result.EffectiveOptions),
-		RequestSpeed:          messageRequestSpeed(result.EffectiveOptions),
-		UsageSpeed:            strings.TrimSpace(result.UsageSpeed),
-		RequestServiceTier:    messageRequestServiceTier(result.EffectiveOptions),
-		UsageServiceTier:      strings.TrimSpace(result.UsageServiceTier),
-		UsageSource:           strings.TrimSpace(result.UsageSource),
-		BilledReason:          ModerationBlockedBilledReason(result, authorization),
-		InputTokens:           sendMessageBillingInputTokens(result),
-		CacheReadTokens:       sendMessageBillingCacheReadTokens(result),
-		CacheWriteTokens:      sendMessageBillingCacheWriteTokens(result),
-		CacheWrite5mTokens:    result.CacheWrite5mTokens,
-		CacheWrite1hTokens:    result.CacheWrite1hTokens,
-		OutputTokens:          result.AssistantMessage.OutputTokens,
-		ReasoningTokens:       result.AssistantMessage.ReasoningTokens,
-		CallCount:             sendMessageBillingCallCount(result),
-		DurationBillable:      isVideoGeneration,
-		DurationSeconds:       sendMessageBillingDurationSeconds(result),
-		MediaType:             mediaType,
-		InputImageCount:       inputImageCount,
-		LatencyMS:             latencyMS,
-		ServerSideToolUsage:   result.ServerSideToolUsage,
-		MCPToolUsage:          sendMessageMCPToolUsageInputs(result),
-		RawUsageJSON:          result.RawUsageJSON,
-		BillingAt:             result.StartedAt,
+		Authorization:       authorization,
+		UserID:              input.UserID,
+		ConversationID:      input.ConversationID,
+		PlatformModelName:   sendMessageBillingPlatformModelName(input),
+		RoutedBindingCode:   strings.TrimSpace(result.RoutedBindingCode),
+		ProviderProtocol:    strings.TrimSpace(result.UpstreamProtocol),
+		UpstreamName:        strings.TrimSpace(result.UpstreamName),
+		UpstreamModelName:   strings.TrimSpace(result.UpstreamModelName),
+		CacheTimeout:        messageCacheTimeout(result.EffectiveOptions),
+		RequestSpeed:        messageRequestSpeed(result.EffectiveOptions),
+		UsageSpeed:          strings.TrimSpace(result.UsageSpeed),
+		RequestServiceTier:  messageRequestServiceTier(result.EffectiveOptions),
+		UsageServiceTier:    strings.TrimSpace(result.UsageServiceTier),
+		UsageSource:         strings.TrimSpace(result.UsageSource),
+		BilledReason:        ModerationBlockedBilledReason(result, authorization),
+		InputTokens:         sendMessageBillingInputTokens(result),
+		CacheReadTokens:     sendMessageBillingCacheReadTokens(result),
+		CacheWriteTokens:    sendMessageBillingCacheWriteTokens(result),
+		CacheWrite5mTokens:  result.CacheWrite5mTokens,
+		CacheWrite1hTokens:  result.CacheWrite1hTokens,
+		OutputTokens:        result.AssistantMessage.OutputTokens,
+		ReasoningTokens:     result.AssistantMessage.ReasoningTokens,
+		CallCount:           sendMessageBillingCallCount(result),
+		DurationBillable:    isVideoGeneration,
+		DurationSeconds:     sendMessageBillingDurationSeconds(result),
+		MediaType:           mediaType,
+		InputImageCount:     inputImageCount,
+		LatencyMS:           latencyMS,
+		ServerSideToolUsage: result.ServerSideToolUsage,
+		MCPToolUsage:        sendMessageMCPToolUsageInputs(result),
+		RawUsageJSON:        result.RawUsageJSON,
+		BillingAt:           result.StartedAt,
 	})
 }
 

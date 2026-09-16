@@ -1,4 +1,3 @@
-import { sub2Status } from "@/features/sub2/api";
 import {
   getAdminBillingConfig,
   listAdminBillingPlans,
@@ -34,12 +33,12 @@ export async function getAdminReferenceData(accessToken: string): Promise<AdminR
     return pendingReferenceData;
   }
 
-  pendingReferenceData = sub2Status().then((authority) => Promise.all([
+  pendingReferenceData = Promise.all([
     getAdminBillingConfig(accessToken),
-    authority.enabled ? Promise.resolve([] as AdminBillingPlanDTO[]) : listAdminBillingPlans(accessToken),
+    listAdminBillingPlans(accessToken),
     listAllAdminPages((options) => listAdminLLMModels(accessToken, { ...options, onlyActive: false, sort: "sortOrder_asc" })),
     listAllAdminPages((options) => listAdminModelPricing(accessToken, options)),
-  ]))
+  ])
     .then(([billingConfig, billingPlans, models, modelPricing]) => {
       const value = { billingConfig, billingPlans, models, modelPricing };
       cachedReferenceData = {

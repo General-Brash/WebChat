@@ -10,18 +10,15 @@ import (
 	"time"
 
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/extraction"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/filetrigger"
 	domainconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/filetype"
 	portembedding "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/embedding"
-	authorityllm "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/apperr"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/background"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/embeddingutil"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/tokenestimate"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -30,8 +27,6 @@ var (
 	ErrEmbeddingServiceUnavailable   = errors.New("embedding service unavailable")
 	ErrEmbeddingQueueUnavailable     = errors.New("embedding queue unavailable")
 	ErrTooManyTargetedFiles          = errors.New("too many files for targeted embedding")
-	ErrReindexInitiatorRequired      = apperr.NewMasked("embedding.reindex_initiator_required", "an authenticated administrator is required to start reindex", "reindex requires an authenticated administrator")
-	ErrReindexPersistenceUnavailable = errors.New("embedding reindex persistence unavailable")
 	errNoExtractableText             = errors.New("no extractable text in file")
 	errEmptyChunks                   = errors.New("embedding produced no chunks")
 	errEmbeddingConfigurationChanged = errors.New("embedding configuration changed")
@@ -110,9 +105,6 @@ type TargetedJob struct {
 	UserID             uint
 	EmbeddingSignature string
 	EmbeddingHost      string
-	// TriggerContext is the immutable per-file operation envelope persisted in
-	// the Q2 queue before the worker/provider boundary.
-	TriggerContext authorityllm.TrustedTriggerContext
 }
 
 type TargetedSubmissionPlan struct {
@@ -133,12 +125,9 @@ type Service struct {
 	embedClient EmbeddingClient
 	logger      *zap.Logger
 	workSlots   chan struct{}
-	reindexRepo  repository.EmbeddingReindexRepository
-	reindexQueue repository.FileProcessingQueueRepository
-	reindexJobs  chan string
-	reindexMu    sync.Mutex
-	reindexing   bool
-	reindexWorkerID string
+	reindexJobs chan string
+	reindexMu   sync.Mutex
+	reindexing  bool
 
 	vectorStoreMu        sync.Mutex
 	vectorStoreChecked   bool
@@ -163,55 +152,21 @@ func NewServiceWithRuntime(cfg *config.Runtime, repo repository.EmbeddingReposit
 	}
 }
 
-// SetReindexRepository injects the dedicated durable global-reindex store.
-func (s *Service) SetReindexRepository(repo repository.EmbeddingReindexRepository) {
-	if s != nil {
-		s.reindexRepo = repo
-	}
-}
-
-// SetReindexQueue injects the existing Q2 file-embedding queue. Global work
-// must use the same durable queue envelope as targeted file embedding.
-func (s *Service) SetReindexQueue(queue repository.FileProcessingQueueRepository) {
-	if s != nil {
-		s.reindexQueue = queue
-	}
-}
-
-// StartBackgroundWorkers resumes only already-attributed durable jobs. It does
-// not invent an actor from startup, a file owner, or the current browser.
+// StartBackgroundWorkers 启动后台重建任务的常驻执行协程；ctx 取消后不再领取新任务。
 func (s *Service) StartBackgroundWorkers(ctx context.Context) {
 	if s == nil || ctx == nil {
 		return
 	}
-	s.reindexWorkerID = uuid.NewString()
 	background.Go(s.logger, "embedding_reindex_dispatch", func() {
-		if s.reindexRepo != nil {
-			if job, err := s.reindexRepo.GetActive(ctx); err == nil && job != nil {
-				s.signalReindex(job.JobID)
-			} else if err != nil && s.logger != nil {
-				s.logger.Warn("embedding_reindex_resume_lookup_failed", zap.Error(err))
-			}
-		}
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case jobID := <-s.reindexJobs:
-				s.runReindex(ctx, jobID)
+			case signature := <-s.reindexJobs:
+				s.runReindex(ctx, signature)
 			}
 		}
 	})
-}
-
-func (s *Service) signalReindex(jobID string) {
-	if s == nil || strings.TrimSpace(jobID) == "" {
-		return
-	}
-	select {
-	case s.reindexJobs <- strings.TrimSpace(jobID):
-	default:
-	}
 }
 
 // Available 返回当前对话 RAG 检索能力是否可用及原因。
@@ -327,28 +282,14 @@ func (s *Service) PlanFiles(ctx context.Context, userID uint, fileIDs []string) 
 	if len(normalizedIDs) == 0 {
 		return plan, nil
 	}
-	if !authorityllm.ExecutionSubjectFromContext(ctx).HasTriggerer() {
-		return plan, authorityllm.ErrTrustedTriggerRequired
-	}
-	operationCtx := ctx
-	var rootTrigger authorityllm.TrustedTriggerContext
-	hasRootTrigger := false
-	if authorityllm.ExecutionSubjectFromContext(ctx).HasTriggerer() {
-		var err error
-		operationCtx, rootTrigger, err = filetrigger.Ensure(ctx, userID, filetrigger.PurposeFileEmbedding)
-		if err != nil {
-			return plan, err
-		}
-		hasRootTrigger = true
-	}
 
 	cfg := s.snapshot()
-	available, reason, err := s.indexingAvailable(operationCtx, cfg)
+	available, reason, err := s.indexingAvailable(ctx, cfg)
 	if !available {
 		return plan, embeddingAvailabilityError(reason, err)
 	}
 
-	files, err := s.repo.GetActiveFileObjectsByIDs(operationCtx, userID, normalizedIDs)
+	files, err := s.repo.GetActiveFileObjectsByIDs(ctx, userID, normalizedIDs)
 	if err != nil {
 		return plan, err
 	}
@@ -370,22 +311,12 @@ func (s *Service) PlanFiles(ctx context.Context, userID uint, fileIDs []string) 
 			continue
 		}
 
-		job := TargetedJob{
+		plan.Jobs = append(plan.Jobs, TargetedJob{
 			FileID:             fileID,
 			UserID:             userID,
 			EmbeddingSignature: embeddingSignature,
 			EmbeddingHost:      embeddingHost,
-		}
-		if hasRootTrigger {
-			_, childTrigger, childErr := filetrigger.ChildForFile(operationCtx, fileID, embeddingSignature)
-			if childErr != nil {
-				return plan, childErr
-			}
-			job.TriggerContext = childTrigger
-		} else {
-			job.TriggerContext = rootTrigger
-		}
-		plan.Jobs = append(plan.Jobs, job)
+		})
 	}
 	return plan, nil
 }
@@ -395,18 +326,6 @@ func (s *Service) PlanFiles(ctx context.Context, userID uint, fileIDs []string) 
 func (s *Service) QueueTargetedJob(ctx context.Context, job TargetedJob) (bool, error) {
 	if s == nil || s.repo == nil || strings.TrimSpace(job.FileID) == "" || strings.TrimSpace(job.EmbeddingSignature) == "" {
 		return false, nil
-	}
-	job.TriggerContext = repository.NormalizeTrustedTriggerContext(job.TriggerContext)
-	if !job.TriggerContext.HasTriggerer() {
-		return false, authorityllm.ErrTrustedTriggerRequired
-	}
-	if repository.HasTrustedTriggerMetadata(job.TriggerContext) {
-		if job.TriggerContext.ResourceOwnerUserID != job.UserID {
-			return false, authorityllm.ErrTrustedTriggerMismatch
-		}
-		if job.TriggerContext.Purpose != filetrigger.PurposeFileEmbedding {
-			return false, authorityllm.ErrTrustedTriggerMismatch
-		}
 	}
 	return s.repo.QueueFileEmbedding(ctx, job.UserID, job.FileID, job.EmbeddingSignature)
 }
@@ -449,17 +368,6 @@ func (s *Service) ProcessTargetedJob(ctx context.Context, job TargetedJob) error
 	if s == nil || s.repo == nil || strings.TrimSpace(job.FileID) == "" {
 		return nil
 	}
-	job.TriggerContext = repository.NormalizeTrustedTriggerContext(job.TriggerContext)
-	if !job.TriggerContext.HasTriggerer() {
-		return authorityllm.ErrTrustedTriggerRequired
-	}
-	if repository.HasTrustedTriggerMetadata(job.TriggerContext) {
-		var err error
-		ctx, job.TriggerContext, err = filetrigger.Restore(ctx, job.TriggerContext)
-		if err != nil {
-			return err
-		}
-	}
 	releaseSlot, err := s.acquireWorkSlot(ctx)
 	if err != nil {
 		return err
@@ -492,7 +400,7 @@ func (s *Service) ProcessTargetedJob(ctx context.Context, job TargetedJob) error
 			return claimErr
 		}
 	}
-	return s.processClaimedFile(ctx, *fileObj, cfg, job.EmbeddingSignature, job.TriggerContext)
+	return s.processClaimedFile(ctx, *fileObj, cfg, job.EmbeddingSignature)
 }
 
 // FailTargetedJob 将投递失败的已领取任务释放为可重试状态。
@@ -568,30 +476,6 @@ func (s *Service) ProcessFile(ctx context.Context, fileObj domainconversation.Fi
 	if !canEmbedFile(cfg, fileObj) {
 		return nil
 	}
-	var trigger authorityllm.TrustedTriggerContext
-	if subject := authorityllm.ExecutionSubjectFromContext(ctx); subject.ExecutionID != "" {
-		trigger = subject.TrustedTriggerContext
-	} else {
-		var restored bool
-		var err error
-		ctx, trigger, restored, err = filetrigger.RestoreFileObject(ctx, fileObj)
-		if err != nil {
-			return err
-		}
-		if !restored {
-			trigger = authorityllm.TrustedTriggerContext{}
-		}
-	}
-	if !trigger.HasTriggerer() {
-		return authorityllm.ErrTrustedTriggerRequired
-	}
-	if trigger.Purpose == filetrigger.PurposeFileExtract {
-		var err error
-		ctx, trigger, err = filetrigger.ChildForFile(ctx, fileObj.FileID, embeddingSignature)
-		if err != nil {
-			return err
-		}
-	}
 	releaseSlot, err := s.acquireWorkSlot(ctx)
 	if err != nil {
 		return err
@@ -605,19 +489,10 @@ func (s *Service) ProcessFile(ctx context.Context, fileObj domainconversation.Fi
 	if !claimed {
 		return nil
 	}
-	return s.processClaimedFile(ctx, fileObj, cfg, embeddingSignature, trigger)
+	return s.processClaimedFile(ctx, fileObj, cfg, embeddingSignature)
 }
 
-func (s *Service) processClaimedFile(
-	ctx context.Context,
-	fileObj domainconversation.FileObject,
-	cfg config.Config,
-	embeddingSignature string,
-	trigger authorityllm.TrustedTriggerContext,
-) error {
-	if !trigger.HasTriggerer() {
-		return authorityllm.ErrTrustedTriggerRequired
-	}
+func (s *Service) processClaimedFile(ctx context.Context, fileObj domainconversation.FileObject, cfg config.Config, embeddingSignature string) error {
 	text, err := s.loadSourceText(ctx, fileObj)
 	if err != nil {
 		_ = s.updateFileObjectEmbedStatus(ctx, fileObj.UserID, fileObj.FileID, embeddingSignature, "failed", err)
@@ -634,7 +509,7 @@ func (s *Service) processClaimedFile(
 		return errEmptyChunks
 	}
 
-	embeddings, err := s.embedTextsWithConfig(ctx, chunks, cfg, "file.embedding")
+	embeddings, err := s.embedTextsWithConfig(ctx, chunks, cfg)
 	if err != nil {
 		_ = s.updateFileObjectEmbedStatus(ctx, fileObj.UserID, fileObj.FileID, embeddingSignature, "failed", err)
 		return err
@@ -786,21 +661,15 @@ func (s *Service) EmbedTexts(ctx context.Context, texts []string) ([][]float32, 
 
 // EmbedTextsWithSignature 使用同一份配置快照生成向量和签名，避免配置切换期间错标向量空间。
 func (s *Service) EmbedTextsWithSignature(ctx context.Context, texts []string) ([][]float32, string, error) {
-	return s.EmbedTextsWithSignatureFor(ctx, texts, "embedding")
-}
-
-// EmbedTextsWithSignatureFor 为指定辅助 producer 生成向量，并在 provider 边界
-// 显式建立可信 execution child。operation 只用于稳定区分不同 producer。
-func (s *Service) EmbedTextsWithSignatureFor(ctx context.Context, texts []string, operation string) ([][]float32, string, error) {
 	cfg := s.snapshot()
-	embeddings, err := s.embedTextsWithConfig(ctx, texts, cfg, operation)
+	embeddings, err := s.embedTextsWithConfig(ctx, texts, cfg)
 	if err != nil {
 		return nil, "", err
 	}
 	return embeddings, configuredModelSignature(cfg), nil
 }
 
-func (s *Service) embedTextsWithConfig(ctx context.Context, texts []string, cfg config.Config, operation string) ([][]float32, error) {
+func (s *Service) embedTextsWithConfig(ctx context.Context, texts []string, cfg config.Config) ([][]float32, error) {
 	if len(texts) == 0 {
 		return nil, nil
 	}
@@ -816,10 +685,6 @@ func (s *Service) embedTextsWithConfig(ctx context.Context, texts []string, cfg 
 		return nil, fmt.Errorf("embedding client not configured")
 	}
 
-	providerCtx, err := prepareEmbeddingProviderContext(ctx, texts, cfg, operation)
-	if err != nil {
-		return nil, err
-	}
 	apiBase := strings.TrimRight(host, "/")
 	apiKey := strings.TrimSpace(cfg.EmbeddingKey)
 	batchSize := cfg.EmbedBatchSize
@@ -833,7 +698,7 @@ func (s *Service) embedTextsWithConfig(ctx context.Context, texts []string, cfg 
 		if end > len(texts) {
 			end = len(texts)
 		}
-		batchEmbeddings, batchErr := s.embedClient.CallAPI(providerCtx, portembedding.Request{
+		batchEmbeddings, batchErr := s.embedClient.CallAPI(ctx, portembedding.Request{
 			APIBase:        apiBase,
 			APIKey:         apiKey,
 			Model:          model,
@@ -858,84 +723,21 @@ func (s *Service) embedTextsWithConfig(ctx context.Context, texts []string, cfg 
 	return allEmbeddings, nil
 }
 
-func prepareEmbeddingProviderContext(ctx context.Context, texts []string, cfg config.Config, operation string) (context.Context, error) {
-	if ctx == nil {
-		return ctx, authorityllm.ErrTrustedTriggerRequired
-	}
-	subject := authorityllm.ExecutionSubjectFromContext(ctx)
-	if !subject.HasTriggerer() {
-		return ctx, authorityllm.ErrTrustedTriggerRequired
-	}
-	operation = strings.TrimSpace(operation)
-	if operation == "" {
-		operation = "embedding"
-	}
-	seed := strings.Join([]string{
-		"deeix-chat:embedding-provider",
-		operation,
-		subject.RunID,
-		subject.ExecutionID,
-		configuredModelSignature(cfg),
-		strings.TrimRight(strings.TrimSpace(cfg.EmbeddingHost), "/"),
-		strings.Join(texts, "\x00"),
-	}, "\x00")
-	if strings.TrimSpace(subject.ExecutionID) != "" {
-		childID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(seed)).String()
-		childCtx, err := authorityllm.WithTrustedExecutionChild(ctx, childID)
-		if err != nil {
-			return ctx, err
-		}
-		return childCtx, nil
-	}
-
-	trigger := subject.TrustedTriggerContext
-	trigger.TriggererUserID = subject.TriggererUserID
-	if strings.TrimSpace(trigger.Purpose) == "" {
-		trigger.Purpose = "embedding"
-	}
-	if strings.TrimSpace(trigger.RunID) == "" {
-		trigger.RunID = "embedding_" + uuid.NewString()
-	}
-	trigger.ExecutionID = uuid.NewString()
-	if trigger.CreatedAt.IsZero() {
-		trigger.CreatedAt = time.Now().UTC()
-	}
-	providerCtx, err := authorityllm.WithTrustedTriggerContext(ctx, trigger)
-	if err != nil {
-		return ctx, err
-	}
-	return providerCtx, nil
-}
-
 func (s *Service) snapshot() config.Config {
 	if s == nil || s.cfg == nil {
 		return config.Config{}
 	}
-	snapshot := s.cfg.Snapshot()
-	if snapshot.UsesSub2Authority() {
-		snapshot.EmbeddingHost = snapshot.Sub2BaseURL
-		snapshot.EmbeddingKey = ""
-	}
-	return snapshot
+	return s.cfg.Snapshot()
 }
 
 // EmbeddingIndexStatus 表示向量索引的当前健康状态。
 type EmbeddingIndexStatus struct {
-	ModelSignature       string
-	ReadyCount           int64
-	StaleCount           int64
-	PendingCount         int64
-	FailedCount          int64
-	NeedsReindex         bool
-	ReindexJobID         string
-	ReindexStatus        string
-	ReindexPayerUserID   uint
-	ReindexTotalFiles    int64
-	ReindexSubmitted     int64
-	ReindexCompleted     int64
-	ReindexFailed        int64
-	ReindexCursor        uint
-	ReindexLastError     string
+	ModelSignature string
+	ReadyCount     int64
+	StaleCount     int64
+	PendingCount   int64
+	FailedCount    int64
+	NeedsReindex   bool
 }
 
 // ComputeModelSignature 根据模型名和输出维度计算模型签名（格式: hex8@dims）。
@@ -985,21 +787,6 @@ func (s *Service) GetIndexStatus(ctx context.Context) (EmbeddingIndexStatus, err
 	processingCount, _ := s.repo.CountFilesByEmbedStatus(ctx, "processing")
 	status.PendingCount = noneCount + queuedCount + processingCount
 	status.NeedsReindex = status.StaleCount > 0
-	if s.reindexRepo != nil {
-		if job, jobErr := s.reindexRepo.GetActive(ctx); jobErr != nil {
-			return status, jobErr
-		} else if job != nil {
-			status.ReindexJobID = job.JobID
-			status.ReindexStatus = job.Status
-			status.ReindexPayerUserID = job.TriggererUserID
-			status.ReindexTotalFiles = job.TotalFiles
-			status.ReindexSubmitted = job.SubmittedFiles
-			status.ReindexCompleted = job.CompletedFiles
-			status.ReindexFailed = job.FailedFiles
-			status.ReindexCursor = job.Cursor
-			status.ReindexLastError = job.LastError
-		}
-	}
 	return status, nil
 }
 
@@ -1020,19 +807,11 @@ func (s *Service) ReconcileIndex(ctx context.Context) (int64, error) {
 	return s.MarkFilesStale(ctx, configuredModelSignature(s.snapshot()))
 }
 
-// ReindexStaleFiles creates one durable, administrator-attributed intent and
-// schedules it through the existing Q2 embedding queue. A missing trigger is
-// never replaced with a file owner, worker, startup, or browser actor.
-func (s *Service) ReindexStaleFiles(ctx context.Context, triggers ...authorityllm.TrustedTriggerContext) (int, error) {
-	if s == nil || s.repo == nil || s.reindexRepo == nil || s.reindexQueue == nil {
-		return 0, ErrReindexPersistenceUnavailable
-	}
-	if len(triggers) != 1 || !triggers[0].HasTriggerer() {
-		return 0, ErrReindexInitiatorRequired
-	}
-	trigger := repository.NormalizeTrustedTriggerContext(triggers[0])
-	if !repository.HasTrustedTriggerMetadata(trigger) || strings.TrimSpace(trigger.RunID) == "" || strings.TrimSpace(trigger.ExecutionID) == "" {
-		return 0, ErrReindexInitiatorRequired
+// ReindexStaleFiles 提交一次去重的后台重建任务，返回本次纳入重建的文件数。
+// 后台任务通过固定 worker 数执行，不会按文件数量无限创建 goroutine。
+func (s *Service) ReindexStaleFiles(ctx context.Context) (int, error) {
+	if s.repo == nil {
+		return 0, nil
 	}
 	cfg := s.snapshot()
 	available, _, err := s.indexingAvailable(ctx, cfg)
@@ -1043,253 +822,113 @@ func (s *Service) ReindexStaleFiles(ctx context.Context, triggers ...authorityll
 		return 0, ErrEmbeddingServiceNotConfigured
 	}
 
-	createdAt := trigger.CreatedAt.UTC()
-	if createdAt.IsZero() {
-		createdAt = time.Now().UTC()
-	}
-	total, err := s.countReindexCandidates(ctx, cfg, createdAt)
-	if err != nil {
-		return 0, err
-	}
-	if total == 0 {
+	s.reindexMu.Lock()
+	if s.reindexing {
+		s.reindexMu.Unlock()
 		return 0, nil
 	}
-	job := &repository.EmbeddingReindexJob{
-		JobID:               uuid.NewString(),
-		TriggererUserID:     trigger.TriggererUserID,
-		ResourceOwnerUserID: trigger.ResourceOwnerUserID,
-		Purpose:             trigger.Purpose,
-		RunID:               trigger.RunID,
-		ExecutionID:         trigger.ExecutionID,
-		ParentExecutionID:   trigger.ParentExecutionID,
-		TriggerCreatedAt:    createdAt,
-		EmbeddingSignature:  configuredModelSignature(cfg),
-		EmbeddingHost:       strings.TrimRight(strings.TrimSpace(cfg.EmbeddingHost), "/"),
-		EmbeddingModel:      strings.TrimSpace(cfg.RAGModel),
-		EmbeddingDimensions: cfg.EmbeddingOutputDimensions,
-		ConfigIdentity:      ComputeSpaceSignature(cfg.RAGModel, cfg.EmbeddingOutputDimensions, cfg.EmbeddingHost),
-		Status:              repository.EmbeddingReindexStatusQueued,
-		TotalFiles:          int64(total),
-	}
-	stored, created, err := s.reindexRepo.CreateOrGet(ctx, job)
-	if err != nil {
-		return 0, err
-	}
-	if !created || stored == nil {
-		return 0, nil
-	}
-	s.signalReindex(stored.JobID)
-	return total, nil
-}
+	s.reindexing = true
+	s.reindexMu.Unlock()
+	started := false
+	defer func() {
+		if started {
+			return
+		}
+		s.reindexMu.Lock()
+		s.reindexing = false
+		s.reindexMu.Unlock()
+	}()
 
-func (s *Service) countReindexCandidates(ctx context.Context, cfg config.Config, before time.Time) (int, error) {
 	const pageSize = 100
-	count := 0
+	submitted := 0
 	var afterID uint
 	for {
 		files, err := s.repo.ListFilesForReindex(ctx, pageSize, afterID)
 		if err != nil {
-			return count, err
+			return submitted, err
 		}
 		if len(files) == 0 {
-			return count, nil
+			break
 		}
-		for _, fileObj := range files {
-			if !fileObj.CreatedAt.IsZero() && fileObj.CreatedAt.After(before) {
-				continue
-			}
-			if canEmbedFile(cfg, fileObj) {
-				count++
+		for _, f := range files {
+			if canEmbedFile(cfg, f) {
+				submitted++
 			}
 		}
 		if len(files) < pageSize {
-			return count, nil
+			break
 		}
 		afterID = files[len(files)-1].ID
 	}
+	if submitted == 0 {
+		return 0, nil
+	}
+
+	started = true
+	// reindexing 标记保证同一时刻至多一个待执行任务，缓冲为 1 的通道不会阻塞。
+	s.reindexJobs <- configuredModelSignature(cfg)
+	return submitted, nil
 }
 
-func (s *Service) runReindex(ctx context.Context, jobID string) {
-	if s == nil || s.reindexRepo == nil || s.reindexQueue == nil || strings.TrimSpace(jobID) == "" {
-		return
-	}
-	now := time.Now().UTC()
-	leaseUntil := now.Add(2 * time.Minute)
-	job, claimed, err := s.reindexRepo.Claim(ctx, jobID, s.reindexWorkerID, now, leaseUntil)
-	if err != nil || !claimed || job == nil {
-		if err != nil && s.logger != nil {
-			s.logger.Warn("embedding_reindex_claim_failed", zap.String("job_id", jobID), zap.Error(err))
-		}
-		return
-	}
-	s.reindexMu.Lock()
-	s.reindexing = true
-	s.reindexMu.Unlock()
+func (s *Service) runReindex(ctx context.Context, expectedSignature string) {
 	defer func() {
 		s.reindexMu.Lock()
 		s.reindexing = false
 		s.reindexMu.Unlock()
 	}()
 
-	if !repository.HasTrustedTriggerMetadata(authorityllm.TrustedTriggerContext{
-		TriggererUserID: job.TriggererUserID, ResourceOwnerUserID: job.ResourceOwnerUserID, Purpose: job.Purpose,
-		RunID: job.RunID, ExecutionID: job.ExecutionID, ParentExecutionID: job.ParentExecutionID, CreatedAt: job.TriggerCreatedAt,
-	}) {
-		job.Status = repository.EmbeddingReindexStatusNeedsInitiator
-		job.LastError = "durable reindex has no authenticated initiator; an administrator must trigger it again"
-		_ = s.reindexRepo.SaveProgress(ctx, job)
-		return
-	}
-	cfg := s.snapshot()
-	if configuredModelSignature(cfg) != job.EmbeddingSignature || strings.TrimRight(strings.TrimSpace(cfg.EmbeddingHost), "/") != job.EmbeddingHost {
-		job.Status = repository.EmbeddingReindexStatusFailed
-		job.LastError = "embedding configuration changed; trigger a new reindex for the new vector space"
-		completedAt := time.Now().UTC()
-		job.CompletedAt = &completedAt
-		_ = s.reindexRepo.SaveProgress(ctx, job)
-		return
+	jobs := make(chan domainconversation.FileObject, WorkerConcurrency)
+	var workers sync.WaitGroup
+	for range WorkerConcurrency {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for fileObj := range jobs {
+				if ctx.Err() != nil || configuredModelSignature(s.snapshot()) != expectedSignature {
+					continue
+				}
+				jobCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+				err := s.ProcessFile(jobCtx, fileObj)
+				cancel()
+				if err != nil && !errors.Is(err, context.Canceled) && s.logger != nil {
+					s.logger.Warn("embedding_reindex_failed", zap.String("file_id", fileObj.FileID), zap.Error(err))
+				}
+			}
+		}()
 	}
 
+	cfg := s.snapshot()
 	const pageSize = 100
-	for ctx.Err() == nil {
-		if !s.refreshReindexLease(ctx, job) {
-			return
-		}
-		files, listErr := s.repo.ListFilesForReindex(ctx, pageSize, job.Cursor)
-		if listErr != nil {
-			job.Status = repository.EmbeddingReindexStatusFailed
-			job.LastError = ErrorSummary(listErr)
-			completedAt := time.Now().UTC()
-			job.CompletedAt = &completedAt
-			_ = s.reindexRepo.SaveProgress(ctx, job)
-			return
+	var afterID uint
+scan:
+	for ctx.Err() == nil && configuredModelSignature(s.snapshot()) == expectedSignature {
+		files, err := s.repo.ListFilesForReindex(ctx, pageSize, afterID)
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Warn("embedding_reindex_list_failed", zap.Error(err))
+			}
+			break
 		}
 		if len(files) == 0 {
 			break
 		}
 		for _, fileObj := range files {
-			job.Cursor = fileObj.ID
-			if !fileObj.CreatedAt.IsZero() && fileObj.CreatedAt.After(job.TriggerCreatedAt) {
-				if !s.refreshReindexLease(ctx, job) {
-					return
-				}
-				continue
-			}
 			if !canEmbedFile(cfg, fileObj) {
-				if !s.refreshReindexLease(ctx, job) {
-					return
-				}
 				continue
 			}
-			queued, queueErr := s.queueReindexFile(ctx, job, fileObj)
-			if queueErr != nil {
-				job.Status = repository.EmbeddingReindexStatusFailed
-				job.LastError = ErrorSummary(queueErr)
-				job.FailedFiles++
-				completedAt := time.Now().UTC()
-				job.CompletedAt = &completedAt
-				_ = s.reindexRepo.SaveProgress(ctx, job)
-				return
-			}
-			if queued {
-				job.SubmittedFiles++
-			}
-			if !s.refreshReindexLease(ctx, job) {
-				return
+			select {
+			case jobs <- fileObj:
+			case <-ctx.Done():
+				break scan
 			}
 		}
 		if len(files) < pageSize {
 			break
 		}
+		afterID = files[len(files)-1].ID
 	}
-	if ctx.Err() != nil {
-		return
-	}
-	s.monitorReindex(ctx, job)
-}
-
-func (s *Service) queueReindexFile(ctx context.Context, job *repository.EmbeddingReindexJob, fileObj domainconversation.FileObject) (bool, error) {
-	rootCtx, _, err := filetrigger.Restore(ctx, authorityllm.TrustedTriggerContext{
-		TriggererUserID: job.TriggererUserID, ResourceOwnerUserID: job.ResourceOwnerUserID, Purpose: job.Purpose,
-		RunID: job.RunID, ExecutionID: job.ExecutionID, ParentExecutionID: job.ParentExecutionID, CreatedAt: job.TriggerCreatedAt,
-	})
-	if err != nil {
-		return false, err
-	}
-	_, child, err := filetrigger.ChildForFile(rootCtx, fileObj.FileID, job.EmbeddingSignature)
-	if err != nil {
-		return false, err
-	}
-	// The Q2 message UserID remains the actual file owner. The global root has
-	// resource owner 0 because one operation spans many owners; bind the child
-	// envelope to the trusted file owner for downstream ACL/storage scope while
-	// retaining the immutable administrator payer and operation/run identity.
-	child.ResourceOwnerUserID = fileObj.UserID
-	queued, err := s.repo.QueueFileEmbedding(ctx, fileObj.UserID, fileObj.FileID, job.EmbeddingSignature)
-	if err != nil || !queued {
-		return false, err
-	}
-	if err := s.reindexQueue.EnqueueFileEmbedding(ctx, fileObj.UserID, fileObj.FileID, job.EmbeddingSignature, job.EmbeddingHost, child); err != nil {
-		_, _ = s.repo.UpdateFileObjectEmbedStatus(ctx, fileObj.UserID, fileObj.FileID, job.EmbeddingSignature, "failed", err)
-		return false, err
-	}
-	return true, nil
-}
-
-func (s *Service) refreshReindexLease(ctx context.Context, job *repository.EmbeddingReindexJob) bool {
-	if job == nil || s.reindexRepo == nil {
-		return false
-	}
-	leaseUntil := time.Now().UTC().Add(2 * time.Minute)
-	job.LeaseOwner = s.reindexWorkerID
-	job.LeaseExpiresAt = &leaseUntil
-	return s.reindexRepo.SaveProgress(ctx, job) == nil
-}
-
-func (s *Service) monitorReindex(ctx context.Context, job *repository.EmbeddingReindexJob) {
-	if job == nil || s.reindexRepo == nil {
-		return
-	}
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for {
-		pending, pendingErr := s.reindexRepo.CountPendingFiles(ctx, job.EmbeddingSignature, job.TriggerCreatedAt)
-		failed, failedErr := s.reindexRepo.CountFailedFiles(ctx, job.EmbeddingSignature, job.TriggerCreatedAt)
-		if pendingErr != nil || failedErr != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			job.LastError = "unable to read durable reindex progress"
-			_ = s.refreshReindexLease(ctx, job)
-		} else {
-			job.FailedFiles = failed
-			job.CompletedFiles = job.TotalFiles - pending - failed
-			if job.CompletedFiles < 0 {
-				job.CompletedFiles = 0
-			}
-			if pending == 0 {
-				completedAt := time.Now().UTC()
-				job.CompletedAt = &completedAt
-				if failed > 0 {
-					job.Status = repository.EmbeddingReindexStatusFailed
-					job.LastError = "one or more files failed embedding; inspect file status and re-trigger"
-				} else {
-					job.Status = repository.EmbeddingReindexStatusCompleted
-					job.LastError = ""
-				}
-				_ = s.reindexRepo.SaveProgress(ctx, job)
-				return
-			}
-			if !s.refreshReindexLease(ctx, job) {
-				return
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
+	close(jobs)
+	workers.Wait()
 }
 
 func supportsEmbeddingSource(fileObj domainconversation.FileObject, cfg config.Config) bool {

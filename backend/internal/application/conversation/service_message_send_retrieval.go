@@ -103,10 +103,9 @@ func (s *Service) retrieveMessageRAGContext(ctx context.Context, in messageRAGRe
 		ragCallCtx, ragCancel = context.WithTimeout(ragCtx, time.Duration(cfg.RAGWaitReadyMS)*time.Millisecond)
 	}
 	ragResult, ragErr := s.ragSvc.RetrieveWithStatus(ragCallCtx, apprag.RetrieveInput{
-		UserID:         input.UserID,
-		Query:          in.query,
-		FileObjs:       readyObjs,
-		TriggerContext: input.TriggerContext,
+		UserID:   input.UserID,
+		Query:    in.query,
+		FileObjs: readyObjs,
 	})
 	ragCancel()
 	platformtracing.RecordError(ragSpan, ragErr)

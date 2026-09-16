@@ -11,18 +11,6 @@
  * ---------------------------------------------------------------
  */
 
-export interface ActionRequest {
-  command?: object;
-  executionID?: string;
-  id?: number;
-  idempotencyKey?: string;
-  payloadFingerprint?: string;
-  query?: string;
-  requestKey?: string;
-  runID?: string;
-  targetUserID?: number;
-}
-
 export interface ActiveMessageGenerationEventResponse {
   conversationPublicID?: string;
   runID?: string;
@@ -312,23 +300,6 @@ export interface AuthUserResponse {
   updatedAt: string;
   username: string;
   usernameChangedAt: string | null;
-}
-
-export interface AuthorityResponseDoc {
-  data: Record<string, any>;
-}
-
-export interface AuthorityStatusData {
-  enabled: boolean;
-  groupRevision?: number;
-  issuer?: string;
-  paidReady?: boolean;
-  playerVersion?: number;
-  pricingVersion?: number;
-}
-
-export interface AuthorityStatusDoc {
-  data: AuthorityStatusData;
 }
 
 export interface BatchDeleteRedemptionCodeDataResponse {
@@ -1265,7 +1236,6 @@ export interface CreateServerRequest {
 }
 
 export interface CreateUpstreamRequest {
-  sub2GroupIDs?: number[];
   /**
    * @minLength 2
    * @maxLength 10000
@@ -1288,7 +1258,6 @@ export interface CreateUpstreamRequest {
   connectTimeoutMS?: number;
   /** @maxLength 10000 */
   headersJSON?: string;
-  kind?: "direct" | "sub2";
   /**
    * @minLength 2
    * @maxLength 128
@@ -1854,15 +1823,12 @@ export interface KnowledgebaseErrorDoc {
 }
 
 export interface LoginOptionsResponse {
-  sub2AuthorityEnabled: boolean;
-  sub2LoginPath: string;
   emailEnabled: boolean;
   emailRegistrationEnabled: boolean;
   emailVerificationEnabled: boolean;
   passwordResetEnabled: boolean;
   providerAuthBridge: ProviderAuthBridgeResponse;
   providers: IdentityProviderResponse[];
-  ssoOnly: boolean;
   turnstileRegistrationEnabled: boolean;
   turnstileSiteKey: string;
   usernameEnabled: boolean;
@@ -3766,7 +3732,6 @@ export interface UpdateToolRequest {
 }
 
 export interface UpdateUpstreamRequest {
-  sub2GroupIDs?: number[];
   /**
    * @minLength 2
    * @maxLength 10000
@@ -3795,7 +3760,6 @@ export interface UpdateUpstreamRequest {
   deleteAPIKeyIDs?: string[];
   /** @maxLength 10000 */
   headersJSON?: string;
-  kind?: "direct" | "sub2";
   /**
    * @minLength 2
    * @maxLength 128
@@ -4033,7 +3997,6 @@ export interface UpstreamRemoteModelResponse {
   alreadySynced: boolean;
   bindingCode: string;
   boundPlatformModels: string[];
-  sourceGroupIDs: number[];
   suggestedKindsJSON: string;
   suggestedPlatformModelName: string;
   suggestedProtocol: string;
@@ -4055,7 +4018,6 @@ export interface UpstreamRemoteModelsResponseDoc {
 }
 
 export interface UpstreamResponse {
-  sub2GroupIDs?: number[];
   activeModelsCount: number;
   apiKeyItems: UpstreamAPIKeyResponse[];
   apiKeysMasked: string;
@@ -4072,7 +4034,6 @@ export interface UpstreamResponse {
   createdAt: string;
   headersJSON: string;
   id: number;
-  kind?: string;
   modelsCount: number;
   name: string;
   protocolDefaultsJSON: string;
@@ -7296,25 +7257,6 @@ export namespace Admin {
   }
 
   /**
-   * No description
-   * @tags sub2
-   * @name Sub2Create
-   * @summary Execute an authorized Sub2 application or financial command
-   * @request POST:/admin/sub2/{operation}
-   * @secure
-   */
-  export namespace Sub2Create {
-    export type RequestParams = {
-      /** Allowlisted administrative operation */
-      operation: string;
-    };
-    export type RequestQuery = {};
-    export type RequestBody = ActionRequest;
-    export type RequestHeaders = {};
-    export type ResponseBody = AuthorityResponseDoc;
-  }
-
-  /**
    * @description 管理员分页查看后台结构化系统事件
    * @tags admin
    * @name SystemEventsList
@@ -9863,59 +9805,6 @@ export namespace Skills {
     export type RequestBody = never;
     export type RequestHeaders = {};
     export type ResponseBody = SkillResponseDoc;
-  }
-}
-
-export namespace Sub2 {
-  /**
-   * No description
-   * @tags sub2
-   * @name StatusList
-   * @summary Read Sub2 authority status
-   * @request GET:/sub2/status
-   * @secure
-   */
-  export namespace StatusList {
-    export type RequestParams = {};
-    export type RequestQuery = {};
-    export type RequestBody = never;
-    export type RequestHeaders = {};
-    export type ResponseBody = AuthorityStatusDoc;
-  }
-
-  /**
-   * @description Operations are explicitly allowlisted; identity is derived server-side. Unknown money results are not replayed.
-   * @tags sub2
-   * @name Sub2Create
-   * @summary Execute a scoped Sub2 user operation
-   * @request POST:/sub2/{operation}
-   * @secure
-   */
-  export namespace Sub2Create {
-    export type RequestParams = {
-      /** Operation */
-      operation:
-        | "wallet"
-        | "execution"
-        | "services-query"
-        | "cancel"
-        | "finance-config"
-        | "finance-plans"
-        | "finance-quote"
-        | "finance-purchase"
-        | "finance-checkout"
-        | "finance-orders"
-        | "finance-order"
-        | "finance-ledger"
-        | "finance-redeem"
-        | "finance-redemptions"
-        | "finance-refund-request"
-        | "finance-subscriptions";
-    };
-    export type RequestQuery = {};
-    export type RequestBody = ActionRequest;
-    export type RequestHeaders = {};
-    export type ResponseBody = AuthorityResponseDoc;
   }
 }
 
