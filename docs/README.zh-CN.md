@@ -218,7 +218,14 @@ docker compose -f docker-compose.full.yml up -d
 | PostgreSQL 数据 | `/var/lib/postgresql/data`，仅全量安装 |
 | Redis 数据 | `/data`，仅全量安装 |
 
-默认应用镜像为 `ghcr.io/deeix-ai/deeix-chat:latest`。测试自定义构建时可通过 `DEEIX_CHAT_IMAGE` 覆盖：
+官方应用镜像发布于 `ghcr.io/general-brash/webchat`。使用 `latest` 获取最新稳定版本，或固定为 `v1.1.0` 以确保部署可复现：
+
+```bash
+docker pull ghcr.io/general-brash/webchat:latest
+docker pull ghcr.io/general-brash/webchat:v1.1.0
+```
+
+测试自定义构建时可通过 `DEEIX_CHAT_IMAGE` 覆盖：
 
 ```bash
 DEEIX_CHAT_IMAGE=deeix-chat:local docker compose up -d --build

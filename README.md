@@ -218,7 +218,14 @@ The default compose files persist application data:
 | PostgreSQL data | `/var/lib/postgresql/data`, full installation only |
 | Redis data | `/data`, full installation only |
 
-The default application image is `ghcr.io/deeix-ai/deeix-chat:latest`. Override it with `DEEIX_CHAT_IMAGE` when testing a custom build:
+The official application image is published to `ghcr.io/general-brash/webchat`. Use `latest` for the newest stable release or pin `v1.1.0` for reproducible deployments:
+
+```bash
+docker pull ghcr.io/general-brash/webchat:latest
+docker pull ghcr.io/general-brash/webchat:v1.1.0
+```
+
+Override it with `DEEIX_CHAT_IMAGE` when testing a custom build:
 
 ```bash
 DEEIX_CHAT_IMAGE=deeix-chat:local docker compose up -d --build

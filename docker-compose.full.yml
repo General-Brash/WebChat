@@ -2,7 +2,7 @@ name: deeix-chat
 
 services:
   app:
-    image: ${DEEIX_CHAT_IMAGE:-ghcr.io/deeix-ai/deeix-chat:latest}
+    image: ${DEEIX_CHAT_IMAGE:-ghcr.io/general-brash/webchat:latest}
     container_name: deeix-chat-app
     depends_on:
       postgres:
