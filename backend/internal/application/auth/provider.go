@@ -1175,14 +1175,6 @@ func (s *Service) exchangeProviderCodeWithResolution(ctx context.Context, provid
 	return &tokenResponse, nil
 }
 
-func (s *Service) fetchProviderUserInfo(ctx context.Context, provider domainuser.IdentityProvider, accessToken string) (map[string]any, error) {
-	resolution, err := s.resolveProviderEndpointResolution(ctx, provider, false)
-	if err != nil {
-		return nil, err
-	}
-	return s.fetchProviderUserInfoWithResolution(ctx, provider, resolution, accessToken)
-}
-
 func (s *Service) fetchProviderUserInfoWithResolution(ctx context.Context, provider domainuser.IdentityProvider, resolution providerEndpointResolution, accessToken string) (map[string]any, error) {
 	userInfoURL := resolution.UserInfoEndpoint
 	trustedEndpoints := providerTrustedEndpointsForResolution(provider, resolution)
@@ -1549,13 +1541,17 @@ func (key oidcJSONWebKey) publicKey(algorithm string) (any, error) {
 			return nil, errors.New("provider OIDC EC signing curve does not match ID token algorithm")
 		}
 		var curve elliptic.Curve
+		var coordinateSize int
 		switch key.Crv {
 		case "P-256":
 			curve = elliptic.P256()
+			coordinateSize = 32
 		case "P-384":
 			curve = elliptic.P384()
+			coordinateSize = 48
 		case "P-521":
 			curve = elliptic.P521()
+			coordinateSize = 66
 		default:
 			return nil, errors.New("provider OIDC EC signing curve is unsupported")
 		}
@@ -1567,12 +1563,21 @@ func (key oidcJSONWebKey) publicKey(algorithm string) (any, error) {
 		if err != nil || len(yBytes) == 0 {
 			return nil, errors.New("provider OIDC EC y coordinate is invalid")
 		}
-		x := new(big.Int).SetBytes(xBytes)
-		y := new(big.Int).SetBytes(yBytes)
-		if !curve.IsOnCurve(x, y) {
+		if len(xBytes) != coordinateSize {
+			return nil, errors.New("provider OIDC EC x coordinate is invalid")
+		}
+		if len(yBytes) != coordinateSize {
+			return nil, errors.New("provider OIDC EC y coordinate is invalid")
+		}
+		uncompressedPublicKey := make([]byte, 1+2*coordinateSize)
+		uncompressedPublicKey[0] = 4
+		copy(uncompressedPublicKey[1:1+coordinateSize], xBytes)
+		copy(uncompressedPublicKey[1+coordinateSize:], yBytes)
+		publicKey, err := ecdsa.ParseUncompressedPublicKey(curve, uncompressedPublicKey)
+		if err != nil {
 			return nil, errors.New("provider OIDC EC signing key is not on its curve")
 		}
-		return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
+		return publicKey, nil
 	default:
 		return nil, errors.New("provider OIDC ID token signing algorithm is unsupported")
 	}
