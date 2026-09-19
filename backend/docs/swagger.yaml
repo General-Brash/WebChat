@@ -9904,7 +9904,7 @@ info:
   contact: {}
   description: DEEIX Chat 后端 API 文档
   title: DEEIX Chat API
-  version: "0.4.1"
+  version: "1.1.0"
 paths:
   /admin/announcements:
     get:
