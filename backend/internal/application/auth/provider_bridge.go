@@ -41,6 +41,7 @@ type providerAuthBridgeState struct {
 	Audience      string `json:"audience"`
 	Provider      string `json:"provider"`
 	TransactionID string `json:"transactionID"`
+	Nonce         string `json:"nonce"`
 	ExpiresAt     int64  `json:"expiresAt"`
 }
 
@@ -141,6 +142,10 @@ func (s *Service) StartProviderAuthBridge(
 	if err != nil {
 		return nil, err
 	}
+	nonce, err := randomProviderAuthToken(32)
+	if err != nil {
+		return nil, err
+	}
 	expiresAt := time.Now().Add(providerAuthTransactionTTL)
 	transaction := repository.ProviderAuthTransaction{
 		ProviderSlug:         slug,
@@ -156,16 +161,18 @@ func (s *Service) StartProviderAuthBridge(
 	if err = s.providerAuthBridge.PutProviderAuthTransaction(ctx, transactionID, transaction, providerAuthTransactionTTL); err != nil {
 		return nil, err
 	}
-	state, err := s.signProviderAuthBridgeState(providerAuthBridgeState{
+	statePayload := providerAuthBridgeState{
 		Audience:      providerAuthBridgeAudience,
 		Provider:      slug,
 		TransactionID: transactionID,
+		Nonce:         nonce,
 		ExpiresAt:     expiresAt.Unix(),
-	})
+	}
+	state, err := s.signProviderAuthBridgeState(statePayload)
 	if err != nil {
 		return nil, err
 	}
-	target, err := buildProviderAuthURL(*provider, authURL, callbackURL, state, providerCodeChallenge(providerVerifier))
+	target, err := buildProviderAuthURL(*provider, authURL, callbackURL, state, providerCodeChallenge(providerVerifier), statePayload.Nonce)
 	if err != nil {
 		return nil, err
 	}
@@ -219,12 +226,13 @@ func (s *Service) CompleteProviderAuthBridgeCallback(
 			if callbackErr != nil {
 				providerErr = callbackErr
 			} else {
-				userItem, subject, providerErr = s.resolveProviderLoginCode(
+				userItem, subject, providerErr = s.resolveProviderLoginCodeWithNonce(
 					ctx,
 					*provider,
 					strings.TrimSpace(input.Code),
 					callbackURL,
 					transaction.ProviderCodeVerifier,
+					state.Nonce,
 				)
 			}
 		}
@@ -384,10 +392,10 @@ func (s *Service) verifyProviderAuthBridgeState(slug string, raw string) (*provi
 	if err = json.Unmarshal(payload, &state); err != nil {
 		return nil, ErrProviderBridgeStateInvalid
 	}
-	if state.Audience != providerAuthBridgeAudience || state.Provider != slug || state.TransactionID == "" {
+	if state.Audience != providerAuthBridgeAudience || state.Provider != slug || state.TransactionID == "" || strings.TrimSpace(state.Nonce) == "" {
 		return nil, ErrProviderBridgeStateMismatch
 	}
-	if time.Now().Unix() > state.ExpiresAt {
+	if time.Now().Unix() >= state.ExpiresAt {
 		return nil, ErrProviderBridgeStateExpired
 	}
 	return &state, nil

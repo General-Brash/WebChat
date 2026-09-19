@@ -2,18 +2,23 @@ package auth
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/hmac"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/textutil"
+	"math/big"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/textutil"
 
 	userapp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/user"
 	domainuser "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/user"
@@ -22,6 +27,7 @@ import (
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/requestmeta"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/security"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -166,10 +172,84 @@ type oauthTokenResponse struct {
 }
 
 type oidcDiscoveryDocument struct {
+	Issuer                                   string
+	AuthorizationEndpoint                    string
+	TokenEndpoint                            string
+	UserInfoEndpoint                         string
+	JWKSURL                                  string
+	TokenEndpointAuthMethodsSupported        []string
+	TokenEndpointAuthMethodsSupportedPresent bool
+}
+
+type providerEndpointResolution struct {
+	Issuer                string
 	AuthorizationEndpoint string
 	TokenEndpoint         string
 	UserInfoEndpoint      string
+	JWKSURL               string
+	Discovery             oidcDiscoveryDocument
 }
+
+// providerUpstreamError preserves a machine-checkable cause without exposing
+// provider HTTP errors, URLs, response details, or request data in Error().
+type providerUpstreamError struct {
+	stage string
+	cause error
+}
+
+func (e *providerUpstreamError) Error() string {
+	stage := strings.TrimSpace(e.stage)
+	if stage == "" {
+		return ErrProviderUpstreamFailed.Error()
+	}
+	return stage + ": " + ErrProviderUpstreamFailed.Error()
+}
+
+func (e *providerUpstreamError) Unwrap() []error {
+	if e.cause == nil {
+		return []error{ErrProviderUpstreamFailed}
+	}
+	return []error{ErrProviderUpstreamFailed, e.cause}
+}
+
+func providerUpstreamFailure(stage string, cause error) error {
+	return &providerUpstreamError{stage: stage, cause: cause}
+}
+
+func providerAuthenticationFailure(stage string) error {
+	stage = strings.TrimSpace(stage)
+	if stage == "" {
+		return ErrProviderAuthenticationFailed
+	}
+	return fmt.Errorf("%s: %w", stage, ErrProviderAuthenticationFailed)
+}
+
+var oidcIDTokenValidMethods = []string{
+	"RS256", "RS384", "RS512",
+	"PS256", "PS384", "PS512",
+	"ES256", "ES384", "ES512",
+}
+
+type oidcJSONWebKeySet struct {
+	Keys []oidcJSONWebKey `json:"keys"`
+}
+
+type oidcJSONWebKey struct {
+	Kty string `json:"kty"`
+	Kid string `json:"kid"`
+	Use string `json:"use"`
+	Alg string `json:"alg"`
+	N   string `json:"n"`
+	E   string `json:"e"`
+	Crv string `json:"crv"`
+	X   string `json:"x"`
+	Y   string `json:"y"`
+}
+
+const (
+	providerTokenAuthClientSecretBasic = "client_secret_basic"
+	providerTokenAuthClientSecretPost  = "client_secret_post"
+)
 
 type githubEmailAddress struct {
 	Email    string `json:"email"`
@@ -383,6 +463,9 @@ func (s *Service) CompleteProviderLogin(ctx context.Context, input CompleteProvi
 	if err != nil {
 		return nil, err
 	}
+	if provider.Type == domainuser.IdentityProviderTypeOIDC && strings.TrimSpace(verifiedState.Nonce) == "" {
+		return nil, ErrOAuthStateInvalid
+	}
 	if verifiedState.Intent != normalizeProviderIntent(input.Intent) {
 		return nil, ErrOAuthIntentMismatch
 	}
@@ -401,7 +484,7 @@ func (s *Service) CompleteProviderLogin(ctx context.Context, input CompleteProvi
 		return nil, err
 	}
 
-	userItem, subject, err := s.resolveProviderLoginCode(ctx, *provider, trimmedCode, input.RedirectURI, strings.TrimSpace(input.CodeVerifier))
+	userItem, subject, err := s.resolveProviderLoginCodeWithNonce(ctx, *provider, trimmedCode, input.RedirectURI, strings.TrimSpace(input.CodeVerifier), verifiedState.Nonce)
 	if err != nil {
 		return nil, err
 	}
@@ -415,13 +498,48 @@ func (s *Service) resolveProviderLoginCode(
 	redirectURI string,
 	codeVerifier string,
 ) (*domainuser.User, string, error) {
-	tokenResponse, err := s.exchangeProviderCode(ctx, provider, code, redirectURI, codeVerifier)
+	return s.resolveProviderLoginCodeWithNonce(ctx, provider, code, redirectURI, codeVerifier, "")
+}
+
+func (s *Service) resolveProviderLoginCodeWithNonce(
+	ctx context.Context,
+	provider domainuser.IdentityProvider,
+	code string,
+	redirectURI string,
+	codeVerifier string,
+	expectedNonce string,
+) (*domainuser.User, string, error) {
+	resolution, err := s.resolveProviderEndpointResolution(ctx, provider, provider.Type == domainuser.IdentityProviderTypeOIDC)
 	if err != nil {
 		return nil, "", err
 	}
-	profile, err := s.fetchProviderUserInfo(ctx, provider, tokenResponse.AccessToken)
+	tokenResponse, err := s.exchangeProviderCodeWithResolution(ctx, provider, resolution, code, redirectURI, codeVerifier)
 	if err != nil {
 		return nil, "", err
+	}
+
+	var idTokenProfile map[string]any
+	if provider.Type == domainuser.IdentityProviderTypeOIDC && strings.TrimSpace(expectedNonce) != "" {
+		idTokenProfile, err = s.validateOIDCIdentityToken(ctx, provider, resolution, tokenResponse.IDToken, expectedNonce)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+
+	var profile map[string]any
+	if strings.TrimSpace(resolution.UserInfoEndpoint) == "" {
+		if idTokenProfile == nil {
+			return nil, "", providerAuthenticationFailure("provider userinfo endpoint is not configured")
+		}
+		profile = idTokenProfile
+	} else {
+		profile, err = s.fetchProviderUserInfoWithResolution(ctx, provider, resolution, tokenResponse.AccessToken)
+		if err != nil {
+			return nil, "", err
+		}
+		if idTokenProfile != nil && claimString(profile, "sub") != claimString(idTokenProfile, "sub") {
+			return nil, "", providerAuthenticationFailure("provider subject does not match the OIDC ID token")
+		}
 	}
 	profileJSON, _ := json.Marshal(profile)
 	subject := claimString(profile, provider.SubjectField)
@@ -432,7 +550,7 @@ func (s *Service) resolveProviderLoginCode(
 	if err != nil {
 		return nil, "", err
 	}
-	displayName := textutil.FirstNonEmpty(claimString(profile, provider.NameField), email, subject)
+	displayName := textutil.FirstNonEmpty(claimString(profile, provider.NameField), claimString(profile, "preferred_username"), email, subject)
 	avatarURL := claimString(profile, provider.AvatarField)
 	emailVerified := resolveProviderEmailVerified(profile, provider)
 	userItem, err := s.resolveProviderUser(ctx, resolveProviderUserInput{
@@ -535,6 +653,9 @@ func (s *Service) CompleteProviderBind(ctx context.Context, input CompleteProvid
 	if err != nil {
 		return nil, err
 	}
+	if provider.Type == domainuser.IdentityProviderTypeOIDC && strings.TrimSpace(verifiedState.Nonce) == "" {
+		return nil, ErrOAuthStateInvalid
+	}
 	if verifiedState.Intent != providerIntentBind {
 		return nil, ErrOAuthIntentMismatch
 	}
@@ -542,13 +663,37 @@ func (s *Service) CompleteProviderBind(ctx context.Context, input CompleteProvid
 		return nil, err
 	}
 
-	tokenResponse, err := s.exchangeProviderCode(ctx, *provider, trimmedCode, input.RedirectURI, strings.TrimSpace(input.CodeVerifier))
+	resolution, err := s.resolveProviderEndpointResolution(ctx, *provider, provider.Type == domainuser.IdentityProviderTypeOIDC)
 	if err != nil {
 		return nil, err
 	}
-	profile, err := s.fetchProviderUserInfo(ctx, *provider, tokenResponse.AccessToken)
+	tokenResponse, err := s.exchangeProviderCodeWithResolution(ctx, *provider, resolution, trimmedCode, input.RedirectURI, strings.TrimSpace(input.CodeVerifier))
 	if err != nil {
 		return nil, err
+	}
+	var idTokenProfile map[string]any
+	if provider.Type == domainuser.IdentityProviderTypeOIDC {
+		idTokenProfile, err = s.validateOIDCIdentityToken(ctx, *provider, resolution, tokenResponse.IDToken, verifiedState.Nonce)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var profile map[string]any
+	if strings.TrimSpace(resolution.UserInfoEndpoint) == "" {
+		if idTokenProfile == nil {
+			return nil, providerAuthenticationFailure("provider userinfo endpoint is not configured")
+		}
+		profile = idTokenProfile
+	} else {
+		profile, err = s.fetchProviderUserInfoWithResolution(ctx, *provider, resolution, tokenResponse.AccessToken)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if idTokenProfile != nil {
+		if claimString(profile, "sub") != claimString(idTokenProfile, "sub") {
+			return nil, providerAuthenticationFailure("provider subject does not match the OIDC ID token")
+		}
 	}
 	profileJSON, _ := json.Marshal(profile)
 	subject := claimString(profile, provider.SubjectField)
@@ -559,7 +704,7 @@ func (s *Service) CompleteProviderBind(ctx context.Context, input CompleteProvid
 	if err != nil {
 		return nil, err
 	}
-	providerDisplayName := textutil.FirstNonEmpty(claimString(profile, provider.NameField), normalizedEmail, subject)
+	providerDisplayName := textutil.FirstNonEmpty(claimString(profile, provider.NameField), claimString(profile, "preferred_username"), normalizedEmail, subject)
 	emailVerified := resolveProviderEmailVerified(profile, *provider)
 	now := time.Now()
 
@@ -669,8 +814,12 @@ func (s *Service) normalizeProviderInput(input UpsertIdentityProviderInput, curr
 		return nil, ErrProviderSlugRequired
 	}
 	scopes := strings.TrimSpace(input.Scopes)
-	if scopes == "" && providerType == domainuser.IdentityProviderTypeOIDC {
-		scopes = "openid profile email"
+	if providerType == domainuser.IdentityProviderTypeOIDC {
+		if scopes == "" {
+			scopes = "openid profile email"
+		} else {
+			scopes = ensureProviderScope(scopes, "openid")
+		}
 	}
 	if scopes == "" {
 		scopes = "profile email"
@@ -879,6 +1028,17 @@ func normalizeProviderIntent(value string) string {
 	}
 }
 
+func ensureProviderScope(scopes string, required string) string {
+	parts := strings.Fields(scopes)
+	for _, part := range parts {
+		if part == required {
+			return strings.Join(parts, " ")
+		}
+	}
+	parts = append([]string{required}, parts...)
+	return strings.Join(parts, " ")
+}
+
 func boolValue(value *bool, fallback bool) bool {
 	if value == nil {
 		return fallback
@@ -886,7 +1046,7 @@ func boolValue(value *bool, fallback bool) bool {
 	return *value
 }
 
-func buildProviderAuthURL(provider domainuser.IdentityProvider, authURL string, redirectURI string, state string, codeChallenge string) (string, error) {
+func buildProviderAuthURL(provider domainuser.IdentityProvider, authURL string, redirectURI string, state string, codeChallenge string, nonce string) (string, error) {
 	if authURL == "" {
 		return "", ErrProviderAuthURLNotConfigured
 	}
@@ -903,6 +1063,9 @@ func buildProviderAuthURL(provider domainuser.IdentityProvider, authURL string, 
 	if strings.TrimSpace(codeChallenge) != "" {
 		values.Set("code_challenge", strings.TrimSpace(codeChallenge))
 		values.Set("code_challenge_method", "S256")
+	}
+	if provider.Type == domainuser.IdentityProviderTypeOIDC && strings.TrimSpace(nonce) != "" {
+		values.Set("nonce", strings.TrimSpace(nonce))
 	}
 	parsed.RawQuery = values.Encode()
 	return parsed.String(), nil
@@ -939,7 +1102,7 @@ func (s *Service) BuildProviderAuthURL(ctx context.Context, slug string, redirec
 	if err != nil {
 		return "", err
 	}
-	state, err := s.signProviderState(providerOAuthState{
+	statePayload := providerOAuthState{
 		Provider:      slug,
 		RedirectURI:   redirectURI,
 		Next:          normalizeProviderNextPath(nextPath),
@@ -947,47 +1110,64 @@ func (s *Service) BuildProviderAuthURL(ctx context.Context, slug string, redirec
 		CodeChallenge: strings.TrimSpace(codeChallenge),
 		Nonce:         conv.NormalizePublicID(uuid.NewString()),
 		ExpiresAt:     time.Now().Add(10 * time.Minute).Unix(),
-	})
+	}
+	state, err := s.signProviderState(statePayload)
 	if err != nil {
 		return "", err
 	}
-	return buildProviderAuthURL(*provider, authURL, redirectURI, state, codeChallenge)
+	return buildProviderAuthURL(*provider, authURL, redirectURI, state, codeChallenge, statePayload.Nonce)
 }
 
 func (s *Service) exchangeProviderCode(ctx context.Context, provider domainuser.IdentityProvider, code string, redirectURI string, codeVerifier string) (*oauthTokenResponse, error) {
-	_, tokenURL, _, err := s.resolveProviderEndpoints(ctx, provider)
+	resolution, err := s.resolveProviderEndpointResolution(ctx, provider, provider.Type == domainuser.IdentityProviderTypeOIDC)
+	if err != nil {
+		return nil, err
+	}
+	return s.exchangeProviderCodeWithResolution(ctx, provider, resolution, code, redirectURI, codeVerifier)
+}
+
+func (s *Service) exchangeProviderCodeWithResolution(ctx context.Context, provider domainuser.IdentityProvider, resolution providerEndpointResolution, code string, redirectURI string, codeVerifier string) (*oauthTokenResponse, error) {
+	tokenAuthMethod, err := resolveProviderTokenAuthMethod(provider, resolution.Discovery)
 	if err != nil {
 		return nil, err
 	}
 	clientSecret, err := secretbox.DecryptString(s.cfg.Snapshot().DataEncryptionKey, provider.ClientSecret)
 	if err != nil {
-		return nil, err
+		return nil, providerUpstreamFailure("provider client authentication configuration failed", err)
 	}
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", code)
 	form.Set("redirect_uri", redirectURI)
-	form.Set("client_id", provider.ClientID)
-	form.Set("client_secret", clientSecret)
 	if strings.TrimSpace(codeVerifier) != "" {
 		form.Set("code_verifier", codeVerifier)
 	}
+	headers := map[string]string{"Accept": "application/json"}
+	switch tokenAuthMethod {
+	case providerTokenAuthClientSecretBasic:
+		headers["Authorization"] = "Basic " + base64.StdEncoding.EncodeToString([]byte(provider.ClientID+":"+clientSecret))
+	case providerTokenAuthClientSecretPost:
+		form.Set("client_id", provider.ClientID)
+		form.Set("client_secret", clientSecret)
+	default:
+		return nil, fmt.Errorf("unsupported provider token endpoint authentication method %q: %w", tokenAuthMethod, ErrProviderUpstreamFailed)
+	}
 	response, err := s.providerHTTPClient.PostForm(
 		ctx,
-		tokenURL,
-		providerTrustedEndpoints(provider),
+		resolution.TokenEndpoint,
+		providerTrustedEndpointsForResolution(provider, resolution),
 		form,
-		map[string]string{"Accept": "application/json"},
+		headers,
 	)
 	if err != nil {
-		return nil, err
+		return nil, providerUpstreamFailure("provider token exchange request failed", err)
 	}
 	if !response.Successful() {
-		return nil, fmt.Errorf("provider token exchange failed: %s: %w", response.Status, ErrProviderUpstreamFailed)
+		return nil, providerUpstreamFailure("provider token exchange failed", nil)
 	}
 	var tokenResponse oauthTokenResponse
 	if tokenResponse, err = parseOAuthTokenResponse(response.Body); err != nil {
-		return nil, fmt.Errorf("provider token response decode failed: %w", ErrProviderUpstreamFailed)
+		return nil, providerUpstreamFailure("provider token response decode failed", err)
 	}
 	if strings.TrimSpace(tokenResponse.AccessToken) == "" {
 		return nil, fmt.Errorf("provider token response missing access token: %w", ErrProviderUpstreamFailed)
@@ -996,11 +1176,16 @@ func (s *Service) exchangeProviderCode(ctx context.Context, provider domainuser.
 }
 
 func (s *Service) fetchProviderUserInfo(ctx context.Context, provider domainuser.IdentityProvider, accessToken string) (map[string]any, error) {
-	_, _, userInfoURL, err := s.resolveProviderEndpoints(ctx, provider)
+	resolution, err := s.resolveProviderEndpointResolution(ctx, provider, false)
 	if err != nil {
 		return nil, err
 	}
-	trustedEndpoints := providerTrustedEndpoints(provider)
+	return s.fetchProviderUserInfoWithResolution(ctx, provider, resolution, accessToken)
+}
+
+func (s *Service) fetchProviderUserInfoWithResolution(ctx context.Context, provider domainuser.IdentityProvider, resolution providerEndpointResolution, accessToken string) (map[string]any, error) {
+	userInfoURL := resolution.UserInfoEndpoint
+	trustedEndpoints := providerTrustedEndpointsForResolution(provider, resolution)
 	response, err := s.providerHTTPClient.Get(
 		ctx,
 		userInfoURL,
@@ -1011,14 +1196,14 @@ func (s *Service) fetchProviderUserInfo(ctx context.Context, provider domainuser
 		},
 	)
 	if err != nil {
-		return nil, err
+		return nil, providerUpstreamFailure("provider userinfo request failed", err)
 	}
 	if !response.Successful() {
-		return nil, fmt.Errorf("provider userinfo failed: %s: %w", response.Status, ErrProviderUpstreamFailed)
+		return nil, providerUpstreamFailure("provider userinfo failed", nil)
 	}
 	var profile map[string]any
 	if err = json.Unmarshal(response.Body, &profile); err != nil {
-		return nil, fmt.Errorf("provider userinfo response decode failed: %w", ErrProviderUpstreamFailed)
+		return nil, providerUpstreamFailure("provider userinfo response decode failed", err)
 	}
 	if githubEmailsURL, ok := githubEmailsEndpoint(provider, userInfoURL); ok {
 		if err = s.enrichGitHubVerifiedEmail(ctx, accessToken, profile, githubEmailsURL, trustedEndpoints); err != nil {
@@ -1052,14 +1237,14 @@ func (s *Service) enrichGitHubVerifiedEmail(
 		},
 	)
 	if err != nil {
-		return err
+		return providerUpstreamFailure("github provider emails request failed", err)
 	}
 	if !response.Successful() {
-		return fmt.Errorf("github provider emails failed: %s: %w", response.Status, ErrProviderUpstreamFailed)
+		return providerUpstreamFailure("github provider emails failed", nil)
 	}
 	var emails []githubEmailAddress
 	if err = json.Unmarshal(response.Body, &emails); err != nil {
-		return fmt.Errorf("github provider emails response decode failed: %w", ErrProviderUpstreamFailed)
+		return providerUpstreamFailure("github provider emails response decode failed", err)
 	}
 	verifiedEmail := selectGitHubVerifiedEmail(existingEmail, emails)
 	if verifiedEmail == "" {
@@ -1126,24 +1311,44 @@ func selectGitHubVerifiedEmail(existingEmail string, emails []githubEmailAddress
 }
 
 func (s *Service) resolveProviderEndpoints(ctx context.Context, provider domainuser.IdentityProvider) (string, string, string, error) {
-	if err := validateIdentityProviderEndpoints(provider); err != nil {
+	resolution, err := s.resolveProviderEndpointResolution(ctx, provider, false)
+	if err != nil {
 		return "", "", "", err
+	}
+	return resolution.AuthorizationEndpoint, resolution.TokenEndpoint, resolution.UserInfoEndpoint, nil
+}
+
+func (s *Service) resolveProviderEndpointResolution(
+	ctx context.Context,
+	provider domainuser.IdentityProvider,
+	requireDiscoveryMetadata bool,
+) (providerEndpointResolution, error) {
+	if err := validateIdentityProviderEndpoints(provider); err != nil {
+		return providerEndpointResolution{}, err
 	}
 	authURL := strings.TrimSpace(provider.AuthURL)
 	tokenURL := strings.TrimSpace(provider.TokenURL)
 	userInfoURL := strings.TrimSpace(provider.UserInfoURL)
-	if authURL != "" && tokenURL != "" && userInfoURL != "" {
-		return authURL, tokenURL, userInfoURL, nil
-	}
 	if provider.Type != domainuser.IdentityProviderTypeOIDC {
-		return authURL, tokenURL, userInfoURL, nil
+		return providerEndpointResolution{
+			AuthorizationEndpoint: authURL,
+			TokenEndpoint:         tokenURL,
+			UserInfoEndpoint:      userInfoURL,
+		}, nil
 	}
 	discoveryURL := strings.TrimSpace(provider.DiscoveryURL)
 	if discoveryURL == "" && strings.TrimSpace(provider.IssuerURL) != "" {
 		discoveryURL = strings.TrimRight(strings.TrimSpace(provider.IssuerURL), "/") + "/.well-known/openid-configuration"
 	}
-	if discoveryURL == "" {
-		return authURL, tokenURL, userInfoURL, nil
+	endpointsComplete := authURL != "" && tokenURL != "" && userInfoURL != ""
+	if discoveryURL == "" || (endpointsComplete && !requireDiscoveryMetadata) {
+		return providerEndpointResolution{
+			Issuer:                strings.TrimSpace(provider.IssuerURL),
+			AuthorizationEndpoint: authURL,
+			TokenEndpoint:         tokenURL,
+			UserInfoEndpoint:      userInfoURL,
+			JWKSURL:               strings.TrimSpace(provider.JWKSURL),
+		}, nil
 	}
 	response, err := s.providerHTTPClient.Get(
 		ctx,
@@ -1152,26 +1357,40 @@ func (s *Service) resolveProviderEndpoints(ctx context.Context, provider domainu
 		map[string]string{"Accept": "application/json"},
 	)
 	if err != nil {
-		return "", "", "", err
+		return providerEndpointResolution{}, providerUpstreamFailure("provider discovery request failed", err)
 	}
 	if !response.Successful() {
-		return "", "", "", fmt.Errorf("provider discovery failed: %s: %w", response.Status, ErrProviderUpstreamFailed)
+		return providerEndpointResolution{}, providerUpstreamFailure("provider discovery failed", nil)
 	}
 	metadata, err := parseOIDCDiscoveryDocument(response.Body)
 	if err != nil {
-		return "", "", "", err
+		return providerEndpointResolution{}, providerUpstreamFailure("provider discovery response decode failed", err)
 	}
 	resolvedAuthURL := textutil.FirstNonEmpty(authURL, metadata.AuthorizationEndpoint)
 	resolvedTokenURL := textutil.FirstNonEmpty(tokenURL, metadata.TokenEndpoint)
 	resolvedUserInfoURL := textutil.FirstNonEmpty(userInfoURL, metadata.UserInfoEndpoint)
+	resolvedIssuer := textutil.FirstNonEmpty(strings.TrimSpace(provider.IssuerURL), metadata.Issuer)
+	resolvedJWKSURL := textutil.FirstNonEmpty(strings.TrimSpace(provider.JWKSURL), metadata.JWKSURL)
+	if strings.TrimSpace(provider.IssuerURL) != "" && strings.TrimSpace(metadata.Issuer) != "" && strings.TrimSpace(provider.IssuerURL) != strings.TrimSpace(metadata.Issuer) {
+		return providerEndpointResolution{}, ErrProviderEndpointInvalid
+	}
 	if err = validateIdentityProviderEndpoints(domainuser.IdentityProvider{
+		IssuerURL:   resolvedIssuer,
 		AuthURL:     resolvedAuthURL,
 		TokenURL:    resolvedTokenURL,
 		UserInfoURL: resolvedUserInfoURL,
+		JWKSURL:     resolvedJWKSURL,
 	}); err != nil {
-		return "", "", "", err
+		return providerEndpointResolution{}, err
 	}
-	return resolvedAuthURL, resolvedTokenURL, resolvedUserInfoURL, nil
+	return providerEndpointResolution{
+		Issuer:                resolvedIssuer,
+		AuthorizationEndpoint: resolvedAuthURL,
+		TokenEndpoint:         resolvedTokenURL,
+		UserInfoEndpoint:      resolvedUserInfoURL,
+		JWKSURL:               resolvedJWKSURL,
+		Discovery:             metadata,
+	}, nil
 }
 
 func parseOAuthTokenResponse(raw []byte) (oauthTokenResponse, error) {
@@ -1186,16 +1405,263 @@ func parseOAuthTokenResponse(raw []byte) (oauthTokenResponse, error) {
 	}, nil
 }
 
+func (s *Service) validateOIDCIdentityToken(
+	ctx context.Context,
+	provider domainuser.IdentityProvider,
+	resolution providerEndpointResolution,
+	rawIDToken string,
+	expectedNonce string,
+) (map[string]any, error) {
+	trimmedNonce := strings.TrimSpace(expectedNonce)
+	if trimmedNonce == "" {
+		return nil, providerAuthenticationFailure("provider OIDC nonce is missing")
+	}
+	if strings.TrimSpace(rawIDToken) == "" {
+		return nil, providerAuthenticationFailure("provider OIDC ID token is missing")
+	}
+	jwksURL := strings.TrimSpace(resolution.JWKSURL)
+	if jwksURL == "" {
+		return nil, providerAuthenticationFailure("provider OIDC JWKS endpoint is not configured")
+	}
+	expectedIssuer := textutil.FirstNonEmpty(strings.TrimSpace(resolution.Issuer), strings.TrimSpace(provider.IssuerURL))
+	if expectedIssuer == "" {
+		return nil, providerAuthenticationFailure("provider OIDC issuer is not configured")
+	}
+	clientID := strings.TrimSpace(provider.ClientID)
+	if clientID == "" {
+		return nil, providerAuthenticationFailure("provider OIDC client id is not configured")
+	}
+	keySet, err := s.fetchOIDCJSONWebKeySet(ctx, provider, resolution)
+	if err != nil {
+		return nil, err
+	}
+
+	claims := jwt.MapClaims{}
+	parsed, err := jwt.ParseWithClaims(
+		strings.TrimSpace(rawIDToken),
+		claims,
+		func(token *jwt.Token) (any, error) {
+			if token == nil || token.Method == nil {
+				return nil, errors.New("provider OIDC ID token signing method is missing")
+			}
+			kid, ok := token.Header["kid"].(string)
+			if !ok || strings.TrimSpace(kid) == "" {
+				return nil, errors.New("provider OIDC ID token key id is missing")
+			}
+			var matched *oidcJSONWebKey
+			for index := range keySet.Keys {
+				key := &keySet.Keys[index]
+				if strings.TrimSpace(key.Kid) != strings.TrimSpace(kid) {
+					continue
+				}
+				if matched != nil {
+					return nil, errors.New("provider OIDC JWKS contains duplicate key ids")
+				}
+				matched = key
+			}
+			if matched == nil {
+				return nil, errors.New("provider OIDC ID token signing key is not found")
+			}
+			return matched.publicKey(token.Method.Alg())
+		},
+		jwt.WithValidMethods(oidcIDTokenValidMethods),
+		jwt.WithIssuer(expectedIssuer),
+		jwt.WithAudience(clientID),
+		jwt.WithExpirationRequired(),
+		jwt.WithIssuedAt(),
+		jwt.WithLeeway(2*time.Minute),
+	)
+	if err != nil || parsed == nil || !parsed.Valid {
+		return nil, providerAuthenticationFailure("provider OIDC ID token validation failed")
+	}
+	claimsMap := map[string]any(claims)
+	audiences, audienceErr := claims.GetAudience()
+	if audienceErr != nil || len(audiences) == 0 || (len(audiences) > 1 && claimString(claimsMap, "azp") != clientID) {
+		return nil, providerAuthenticationFailure("provider OIDC ID token audience is invalid")
+	}
+	if azp := strings.TrimSpace(claimString(claimsMap, "azp")); azp != "" && azp != clientID {
+		return nil, providerAuthenticationFailure("provider OIDC ID token authorized party is invalid")
+	}
+	if !hmac.Equal([]byte(claimString(claimsMap, "nonce")), []byte(trimmedNonce)) {
+		return nil, providerAuthenticationFailure("provider OIDC ID token nonce mismatch")
+	}
+	if claimString(claimsMap, "sub") == "" {
+		return nil, providerAuthenticationFailure("provider OIDC ID token subject is missing")
+	}
+	return claimsMap, nil
+}
+
+func (s *Service) fetchOIDCJSONWebKeySet(
+	ctx context.Context,
+	provider domainuser.IdentityProvider,
+	resolution providerEndpointResolution,
+) (oidcJSONWebKeySet, error) {
+	response, err := s.providerHTTPClient.Get(
+		ctx,
+		resolution.JWKSURL,
+		providerTrustedEndpointsForResolution(provider, resolution),
+		map[string]string{"Accept": "application/json"},
+	)
+	if err != nil {
+		return oidcJSONWebKeySet{}, providerUpstreamFailure("provider OIDC JWKS request failed", err)
+	}
+	if !response.Successful() {
+		return oidcJSONWebKeySet{}, providerUpstreamFailure("provider OIDC JWKS request failed", nil)
+	}
+	var keySet oidcJSONWebKeySet
+	if err = json.Unmarshal(response.Body, &keySet); err != nil || len(keySet.Keys) == 0 {
+		return oidcJSONWebKeySet{}, providerUpstreamFailure("provider OIDC JWKS response decode failed", err)
+	}
+	return keySet, nil
+}
+
+func (key oidcJSONWebKey) publicKey(algorithm string) (any, error) {
+	if strings.TrimSpace(key.Use) != "" && strings.TrimSpace(key.Use) != "sig" {
+		return nil, errors.New("provider OIDC JWKS key is not a signing key")
+	}
+	if strings.TrimSpace(key.Alg) != "" && strings.TrimSpace(key.Alg) != algorithm {
+		return nil, errors.New("provider OIDC JWKS key algorithm does not match ID token")
+	}
+	switch algorithm {
+	case "RS256", "RS384", "RS512", "PS256", "PS384", "PS512":
+		if key.Kty != "RSA" {
+			return nil, errors.New("provider OIDC ID token requires an RSA signing key")
+		}
+		nBytes, err := decodeOIDCBase64URL(key.N)
+		if err != nil || len(nBytes) == 0 {
+			return nil, errors.New("provider OIDC RSA modulus is invalid")
+		}
+		eBytes, err := decodeOIDCBase64URL(key.E)
+		if err != nil || len(eBytes) == 0 {
+			return nil, errors.New("provider OIDC RSA exponent is invalid")
+		}
+		exponent := new(big.Int).SetBytes(eBytes)
+		if exponent.Sign() <= 0 || exponent.BitLen() > 31 {
+			return nil, errors.New("provider OIDC RSA exponent is invalid")
+		}
+		return &rsa.PublicKey{N: new(big.Int).SetBytes(nBytes), E: int(exponent.Int64())}, nil
+	case "ES256", "ES384", "ES512":
+		if key.Kty != "EC" {
+			return nil, errors.New("provider OIDC ID token requires an EC signing key")
+		}
+		expectedCurve := map[string]string{"ES256": "P-256", "ES384": "P-384", "ES512": "P-521"}[algorithm]
+		if key.Crv != expectedCurve {
+			return nil, errors.New("provider OIDC EC signing curve does not match ID token algorithm")
+		}
+		var curve elliptic.Curve
+		switch key.Crv {
+		case "P-256":
+			curve = elliptic.P256()
+		case "P-384":
+			curve = elliptic.P384()
+		case "P-521":
+			curve = elliptic.P521()
+		default:
+			return nil, errors.New("provider OIDC EC signing curve is unsupported")
+		}
+		xBytes, err := decodeOIDCBase64URL(key.X)
+		if err != nil || len(xBytes) == 0 {
+			return nil, errors.New("provider OIDC EC x coordinate is invalid")
+		}
+		yBytes, err := decodeOIDCBase64URL(key.Y)
+		if err != nil || len(yBytes) == 0 {
+			return nil, errors.New("provider OIDC EC y coordinate is invalid")
+		}
+		x := new(big.Int).SetBytes(xBytes)
+		y := new(big.Int).SetBytes(yBytes)
+		if !curve.IsOnCurve(x, y) {
+			return nil, errors.New("provider OIDC EC signing key is not on its curve")
+		}
+		return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
+	default:
+		return nil, errors.New("provider OIDC ID token signing algorithm is unsupported")
+	}
+}
+
+func decodeOIDCBase64URL(value string) ([]byte, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil, errors.New("empty base64url value")
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(trimmed)
+	if err == nil {
+		return decoded, nil
+	}
+	return base64.URLEncoding.DecodeString(trimmed)
+}
+
 func parseOIDCDiscoveryDocument(raw []byte) (oidcDiscoveryDocument, error) {
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return oidcDiscoveryDocument{}, err
 	}
+	authMethodsValue, authMethodsPresent := payload["token_endpoint_auth_methods_supported"]
+	authMethods, err := parseOIDCDiscoveryStringList(authMethodsValue, authMethodsPresent)
+	if err != nil {
+		return oidcDiscoveryDocument{}, err
+	}
 	return oidcDiscoveryDocument{
-		AuthorizationEndpoint: claimString(payload, "authorization_endpoint"),
-		TokenEndpoint:         claimString(payload, "token_endpoint"),
-		UserInfoEndpoint:      claimString(payload, "userinfo_endpoint"),
+		Issuer:                                   claimString(payload, "issuer"),
+		AuthorizationEndpoint:                    claimString(payload, "authorization_endpoint"),
+		TokenEndpoint:                            claimString(payload, "token_endpoint"),
+		UserInfoEndpoint:                         claimString(payload, "userinfo_endpoint"),
+		JWKSURL:                                  claimString(payload, "jwks_uri"),
+		TokenEndpointAuthMethodsSupported:        authMethods,
+		TokenEndpointAuthMethodsSupportedPresent: authMethodsPresent,
 	}, nil
+}
+
+func parseOIDCDiscoveryStringList(value any, present bool) ([]string, error) {
+	if !present {
+		return nil, nil
+	}
+	items, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("provider discovery token endpoint auth methods are invalid: %w", ErrProviderUpstreamFailed)
+	}
+	results := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		method, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("provider discovery token endpoint auth methods are invalid: %w", ErrProviderUpstreamFailed)
+		}
+		method = strings.ToLower(strings.TrimSpace(method))
+		if method == "" {
+			continue
+		}
+		if _, exists := seen[method]; exists {
+			continue
+		}
+		seen[method] = struct{}{}
+		results = append(results, method)
+	}
+	return results, nil
+}
+
+func resolveProviderTokenAuthMethod(provider domainuser.IdentityProvider, discovery oidcDiscoveryDocument) (string, error) {
+	if provider.Type != domainuser.IdentityProviderTypeOIDC {
+		return providerTokenAuthClientSecretPost, nil
+	}
+	if !discovery.TokenEndpointAuthMethodsSupportedPresent {
+		return providerTokenAuthClientSecretBasic, nil
+	}
+	methods := make(map[string]struct{}, len(discovery.TokenEndpointAuthMethodsSupported))
+	for _, method := range discovery.TokenEndpointAuthMethodsSupported {
+		normalized := strings.ToLower(strings.TrimSpace(method))
+		if normalized != "" {
+			methods[normalized] = struct{}{}
+		}
+	}
+	if _, ok := methods[providerTokenAuthClientSecretBasic]; ok {
+		return providerTokenAuthClientSecretBasic, nil
+	}
+	if len(methods) == 1 {
+		if _, ok := methods[providerTokenAuthClientSecretPost]; ok {
+			return providerTokenAuthClientSecretPost, nil
+		}
+	}
+	return "", fmt.Errorf("provider discovery does not advertise a supported confidential client authentication method: %w", ErrProviderUpstreamFailed)
 }
 
 func providerTrustedEndpoints(provider domainuser.IdentityProvider) []string {
@@ -1207,6 +1673,13 @@ func providerTrustedEndpoints(provider domainuser.IdentityProvider) []string {
 		provider.UserInfoURL,
 		provider.JWKSURL,
 	}
+}
+
+func providerTrustedEndpointsForResolution(provider domainuser.IdentityProvider, _ providerEndpointResolution) []string {
+	// Discovery may return endpoint URLs on another origin. Do not turn those
+	// runtime values into local SSRF trust; only administrator-configured
+	// provider origins receive the scoped outbound exception.
+	return providerTrustedEndpoints(provider)
 }
 
 func (s *Service) resolveProviderUser(ctx context.Context, input resolveProviderUserInput) (*domainuser.User, error) {
@@ -1399,10 +1872,15 @@ func (s *Service) verifyProviderState(slug string, redirectURI string, rawState 
 	if err = json.Unmarshal(payload, &state); err != nil {
 		return nil, ErrOAuthStateInvalid
 	}
+	if strings.TrimSpace(state.Provider) == "" || strings.TrimSpace(state.RedirectURI) == "" ||
+		!providerPKCEPattern.MatchString(strings.TrimSpace(state.CodeChallenge)) ||
+		(state.Intent != providerIntentLogin && state.Intent != providerIntentRegister && state.Intent != providerIntentBind) {
+		return nil, ErrOAuthStateInvalid
+	}
 	if state.Provider != slug || state.RedirectURI != redirectURI {
 		return nil, ErrOAuthStateMismatch
 	}
-	if time.Now().Unix() > state.ExpiresAt {
+	if time.Now().Unix() >= state.ExpiresAt {
 		return nil, ErrOAuthStateExpired
 	}
 	if err = s.validateProviderRedirectURI(slug, redirectURI); err != nil {
@@ -1447,7 +1925,11 @@ func (s *Service) validateProviderRedirectURI(slug string, redirectURI string) e
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return ErrInvalidRedirectURI
 	}
-	if parsed.Path != "/auth/callback" || parsed.Query().Get("provider") != slug {
+	if parsed.User != nil || parsed.Fragment != "" || parsed.RawPath != "" || parsed.Path != "/auth/callback" {
+		return ErrInvalidRedirectURI
+	}
+	providerValues, ok := parsed.Query()["provider"]
+	if !ok || len(providerValues) != 1 || providerValues[0] != slug {
 		return ErrInvalidRedirectURI
 	}
 	if s.isAllowedProviderRedirectOrigin(parsed) {
