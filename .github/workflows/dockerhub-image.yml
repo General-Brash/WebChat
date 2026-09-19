@@ -1,12 +1,8 @@
 name: Docker Hub Image
 
 on:
-  push:
-    branches:
-      - main
-      - dev
-    tags:
-      - "v*.*.*"
+  # Docker Hub is no longer part of the automatic publication path.
+  # Keep manual dispatch available for an explicitly configured release.
   workflow_dispatch:
 
 permissions:
