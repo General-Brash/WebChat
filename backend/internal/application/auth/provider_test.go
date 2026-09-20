@@ -231,12 +231,17 @@ func TestExchangeProviderCodeRejectsUnconfiguredPrivateDiscoveryOrigin(t *testin
 		SSRFProtectionEnabled: true,
 		DataEncryptionKey:     dataKey,
 	}, nil, nil)
-	_, err = service.exchangeProviderCode(context.Background(), domainuser.IdentityProvider{
+	provider := domainuser.IdentityProvider{
 		Type:         domainuser.IdentityProviderTypeOIDC,
 		IssuerURL:    server.URL,
 		ClientID:     "client",
 		ClientSecret: clientSecret,
-	}, "code", "https://app.example.com/callback", "")
+	}
+	resolution, err := service.resolveProviderEndpointResolution(context.Background(), provider, provider.Type == domainuser.IdentityProviderTypeOIDC)
+	if err != nil {
+		t.Fatalf("resolve provider endpoint resolution: %v", err)
+	}
+	_, err = service.exchangeProviderCodeWithResolution(context.Background(), provider, resolution, "code", "https://app.example.com/callback", "")
 	if !errors.Is(err, security.ErrUnsafeOutboundURL) {
 		t.Fatalf("expected cross-origin private token endpoint to remain blocked, got %v", err)
 	}

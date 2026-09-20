@@ -130,9 +130,14 @@ func TestProviderOIDCSecurityAuditClassifiesAndRedactsProviderErrors(t *testing.
 	core, logs := observer.New(zap.WarnLevel)
 	service.SetLogger(zap.New(core))
 
-	tokenResponse, err := service.exchangeProviderCode(
+	resolution, err := service.resolveProviderEndpointResolution(context.Background(), provider, provider.Type == domainuser.IdentityProviderTypeOIDC)
+	if err != nil {
+		t.Fatalf("resolve provider endpoint resolution: %v", err)
+	}
+	tokenResponse, err := service.exchangeProviderCodeWithResolution(
 		context.Background(),
 		provider,
+		resolution,
 		authCode,
 		"https://chat.example.com/auth/callback?provider=acme",
 		strings.Repeat("p", 43),

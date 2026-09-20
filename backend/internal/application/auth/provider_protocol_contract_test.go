@@ -126,12 +126,13 @@ func TestProviderProtocolContractProfileDisplayNameFallback(t *testing.T) {
 			service, repo := newProviderProtocolContractService(t, tc.profile)
 			provider := providerProtocolContractProvider(t, service)
 
-			userItem, subject, err := service.resolveProviderLoginCode(
+			userItem, subject, err := service.resolveProviderLoginCodeWithNonce(
 				context.Background(),
 				provider,
 				"authorization-code",
 				"https://chat.example.com/auth/callback?provider=sub2",
 				strings.Repeat("v", 43),
+				"",
 			)
 			if err != nil {
 				t.Fatalf("resolve provider login code: %v", err)
@@ -172,12 +173,13 @@ func TestProviderProtocolContractSub2RoleDoesNotOverrideProviderDefaultRole(t *t
 	provider := providerProtocolContractProvider(t, service)
 	provider.DefaultRole = domainuser.RoleUser
 
-	userItem, _, err := service.resolveProviderLoginCode(
+	userItem, _, err := service.resolveProviderLoginCodeWithNonce(
 		context.Background(),
 		provider,
 		"authorization-code",
 		"https://chat.example.com/auth/callback?provider=sub2",
 		strings.Repeat("v", 43),
+		"",
 	)
 	if err != nil {
 		t.Fatalf("resolve provider login code: %v", err)
@@ -236,9 +238,14 @@ func TestProviderProtocolContractDiscoveryTokenEndpointAuthPolicy(t *testing.T) 
 				DiscoveryURL: "https://idp.example.com/.well-known/openid-configuration",
 			}
 
-			if _, err = service.exchangeProviderCode(
+			resolution, err := service.resolveProviderEndpointResolution(context.Background(), provider, provider.Type == domainuser.IdentityProviderTypeOIDC)
+			if err != nil {
+				t.Fatalf("resolve provider endpoint resolution: %v", err)
+			}
+			if _, err = service.exchangeProviderCodeWithResolution(
 				context.Background(),
 				provider,
+				resolution,
 				"authorization-code",
 				"https://chat.example.com/auth/callback?provider=sub2",
 				strings.Repeat("v", 43),

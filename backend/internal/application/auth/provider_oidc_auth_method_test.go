@@ -83,7 +83,11 @@ func TestExchangeProviderCodeSelectsOIDCDiscoveryTokenAuthMethod(t *testing.T) {
 				UserInfoURL:  "https://idp.example.com/userinfo",
 			}
 
-			_, err = service.exchangeProviderCode(context.Background(), provider, "code", "https://chat.example.com/auth/callback?provider=acme", "verifier")
+			resolution, err := service.resolveProviderEndpointResolution(context.Background(), provider, provider.Type == domainuser.IdentityProviderTypeOIDC)
+			if err != nil {
+				t.Fatalf("resolve provider endpoint resolution: %v", err)
+			}
+			_, err = service.exchangeProviderCodeWithResolution(context.Background(), provider, resolution, "code", "https://chat.example.com/auth/callback?provider=acme", "verifier")
 			if tc.wantErr {
 				if err == nil || !errors.Is(err, ErrProviderUpstreamFailed) {
 					t.Fatalf("expected unsupported discovery authentication error, got %v", err)
@@ -152,7 +156,11 @@ func TestExchangeProviderCodeOAuth2RetainsClientSecretPostWithoutDiscovery(t *te
 		UserInfoURL:  "https://oauth.example.com/userinfo",
 	}
 
-	if _, err = service.exchangeProviderCode(context.Background(), provider, "code", "https://chat.example.com/auth/callback?provider=oauth", "verifier"); err != nil {
+	resolution, err := service.resolveProviderEndpointResolution(context.Background(), provider, provider.Type == domainuser.IdentityProviderTypeOIDC)
+	if err != nil {
+		t.Fatalf("resolve provider endpoint resolution: %v", err)
+	}
+	if _, err = service.exchangeProviderCodeWithResolution(context.Background(), provider, resolution, "code", "https://chat.example.com/auth/callback?provider=oauth", "verifier"); err != nil {
 		t.Fatalf("exchange OAuth2 provider code: %v", err)
 	}
 	if fakeClient.getCalls != 0 {

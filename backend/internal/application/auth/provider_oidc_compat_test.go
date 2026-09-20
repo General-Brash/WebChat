@@ -150,7 +150,11 @@ func TestExchangeProviderCodeOIDCUsesBasicAuthorizationWithoutClientCredentialsF
 		redirectURI  = "https://chat.example.com/auth/callback?provider=acme"
 		codeVerifier = "verifier-value"
 	)
-	if _, err = service.exchangeProviderCode(context.Background(), provider, code, redirectURI, codeVerifier); err != nil {
+	resolution, err := service.resolveProviderEndpointResolution(context.Background(), provider, provider.Type == domainuser.IdentityProviderTypeOIDC)
+	if err != nil {
+		t.Fatalf("resolve provider endpoint resolution: %v", err)
+	}
+	if _, err = service.exchangeProviderCodeWithResolution(context.Background(), provider, resolution, code, redirectURI, codeVerifier); err != nil {
 		t.Fatalf("exchange provider code: %v", err)
 	}
 

@@ -491,16 +491,6 @@ func (s *Service) CompleteProviderLogin(ctx context.Context, input CompleteProvi
 	return s.completeProviderLoginForUser(ctx, userItem, provider.Slug, subject, input.RequestID, input.AuditContext)
 }
 
-func (s *Service) resolveProviderLoginCode(
-	ctx context.Context,
-	provider domainuser.IdentityProvider,
-	code string,
-	redirectURI string,
-	codeVerifier string,
-) (*domainuser.User, string, error) {
-	return s.resolveProviderLoginCodeWithNonce(ctx, provider, code, redirectURI, codeVerifier, "")
-}
-
 func (s *Service) resolveProviderLoginCodeWithNonce(
 	ctx context.Context,
 	provider domainuser.IdentityProvider,
@@ -1116,14 +1106,6 @@ func (s *Service) BuildProviderAuthURL(ctx context.Context, slug string, redirec
 		return "", err
 	}
 	return buildProviderAuthURL(*provider, authURL, redirectURI, state, codeChallenge, statePayload.Nonce)
-}
-
-func (s *Service) exchangeProviderCode(ctx context.Context, provider domainuser.IdentityProvider, code string, redirectURI string, codeVerifier string) (*oauthTokenResponse, error) {
-	resolution, err := s.resolveProviderEndpointResolution(ctx, provider, provider.Type == domainuser.IdentityProviderTypeOIDC)
-	if err != nil {
-		return nil, err
-	}
-	return s.exchangeProviderCodeWithResolution(ctx, provider, resolution, code, redirectURI, codeVerifier)
 }
 
 func (s *Service) exchangeProviderCodeWithResolution(ctx context.Context, provider domainuser.IdentityProvider, resolution providerEndpointResolution, code string, redirectURI string, codeVerifier string) (*oauthTokenResponse, error) {
