@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	userapp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/user"
 	domainuser "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/user"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
@@ -147,8 +148,8 @@ func TestGeneratedUsernameWithSuffix(t *testing.T) {
 
 	long := strings.Repeat("a", 70)
 	got := generatedUsernameWithSuffix(long, 9)
-	if len(got) > 16 {
-		t.Fatalf("expected username length <= 16, got %d", len(got))
+	if len(got) > userapp.UsernameMaxLength {
+		t.Fatalf("expected username length <= %d, got %d", userapp.UsernameMaxLength, len(got))
 	}
 	if !strings.HasSuffix(got, "-10") {
 		t.Fatalf("expected numeric suffix to be preserved, got %q", got)
