@@ -15,6 +15,11 @@ const (
 	// PricingModeTiered 表示按 token 阶梯计费。
 	PricingModeTiered = "tiered"
 
+	// An empty cache-write basis preserves legacy protocol-dependent rates.
+	CacheWritePriceBasisDirect = "direct"
+	// CacheWritePriceBasisAnthropic5m includes the 5m premium; native 1h costs 8/5 of this rate.
+	CacheWritePriceBasisAnthropic5m = "anthropic_5m"
+
 	// IntervalMonth 表示按月计费。
 	IntervalMonth = "month"
 	// IntervalYear 表示按年计费。
@@ -306,12 +311,15 @@ type ModelPricing struct {
 	InputNanousdPerMTokens      int64
 	CacheReadNanousdPerMTokens  int64
 	CacheWriteNanousdPerMTokens int64
+	CacheWritePriceBasis        string
 	OutputNanousdPerMTokens     int64
 	CallNanousdPerCall          int64
 	DurationNanousdPerSecond    int64
 	TieredPricingJSON           string
-	CreatedAt                   time.Time
-	UpdatedAt                   time.Time
+	// SchedulePricingJSON 是时段倍率配置（峰谷计费），与计费模式正交；空或 {} 表示不启用。
+	SchedulePricingJSON string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // UsageLedger 表示用量账本。
@@ -391,8 +399,11 @@ type UsageServiceItem struct {
 	CallBilledNanousd             int64
 	DurationBilledNanousd         int64
 	BilledNanousd                 int64
-	TieredFromTokens              int64
-	TieredUpToTokens              *int64
+	// SchedulePeriodName / ScheduleRatePercent 记录本次命中的时段倍率；未命中为空 / 0。
+	SchedulePeriodName  string
+	ScheduleRatePercent int
+	TieredFromTokens    int64
+	TieredUpToTokens    *int64
 }
 
 // UsageMonthlySummary 表示用户月度用量聚合。

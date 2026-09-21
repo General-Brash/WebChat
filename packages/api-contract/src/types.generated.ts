@@ -1301,7 +1301,7 @@ export interface CreateUserRequest {
   timezone?: string;
   /**
    * @minLength 3
-   * @maxLength 16
+   * @maxLength 32
    */
   username: string;
 }
@@ -1407,6 +1407,32 @@ export interface EmailVerificationStartResponse {
 
 export interface EmailVerificationStartResponseDoc {
   data: EmailVerificationStartResponse;
+  errorMsg: string;
+}
+
+export interface EmbeddingIndexStatusResponse {
+  /** EmptyCount 是提取完成但无文本的文件数；这些文件不参与自动重建。 */
+  emptyCount: number;
+  failedCount: number;
+  modelSignature: string;
+  needsReindex: boolean;
+  pendingCount: number;
+  readyCount: number;
+  staleCount: number;
+}
+
+export interface EmbeddingIndexStatusResponseDoc {
+  data: EmbeddingIndexStatusResponse;
+  errorMsg: string;
+}
+
+export interface EmbeddingReindexResponse {
+  message: string;
+  submitted: number;
+}
+
+export interface EmbeddingReindexResponseDoc {
+  data: EmbeddingReindexResponse;
   errorMsg: string;
 }
 
@@ -1922,6 +1948,16 @@ export interface MessageBillingCostResponse {
   pricingSnapshotJSON: string;
 }
 
+export interface MessageDeleteResponse {
+  deleted: boolean;
+  reparentedMessageCount: number;
+}
+
+export interface MessageDeleteResponseDoc {
+  data: MessageDeleteResponse;
+  errorMsg: string;
+}
+
 export interface MessageFeedbackResponse {
   messageID: number;
   messagePublicID: string;
@@ -2190,6 +2226,7 @@ export interface ModelPricingResponse {
   cacheReadNanousdPerMTokens: number;
   cacheReadUSDPerMTokens: number;
   cacheWriteNanousdPerMTokens: number;
+  cacheWritePriceBasis?: "direct" | "anthropic_5m";
   cacheWriteUSDPerMTokens: number;
   callNanousdPerCall: number;
   callUSDPerCall: number;
@@ -2207,6 +2244,7 @@ export interface ModelPricingResponse {
   outputUSDPerMTokens: number;
   platformModelName: string;
   pricingMode: string;
+  schedulePricingJSON: string;
   tieredPricingJSON: string;
   updatedAt: string;
 }
@@ -2430,16 +2468,27 @@ export interface OpenRouterOfficialPricingItemResponse {
   pricing: OpenRouterOfficialPricingUnitPricingResponse;
 }
 
+export interface OpenRouterOfficialPricingOverrideResponse {
+  completion: string;
+  inputCacheRead: string;
+  inputCacheWrite: string;
+  minPromptTokens: number;
+  prompt: string;
+}
+
 export interface OpenRouterOfficialPricingResponseDoc {
   data: OpenRouterOfficialPricingDataResponse;
   errorMsg: string;
 }
 
 export interface OpenRouterOfficialPricingUnitPricingResponse {
+  cacheWritePriceBasis: "direct" | "anthropic_5m";
   completion: string;
   inputCacheRead: string;
   inputCacheWrite: string;
+  overrides?: OpenRouterOfficialPricingOverrideResponse[];
   prompt: string;
+  unsupportedFields?: string[];
 }
 
 export interface PasswordResetCompleteRequest {
@@ -2575,6 +2624,23 @@ export interface PatchSkillRequest {
   trigger?: string;
 }
 
+export interface PatchUIComponentRequest {
+  /** @maxLength 256 */
+  description?: string;
+  enabled?: boolean;
+  /** @maxLength 64 */
+  name?: string;
+  /** @maxLength 16384 */
+  propsSchema?: string;
+  /** @maxLength 1024 */
+  propsSummary?: string;
+  /** @maxLength 262144 */
+  rendererSource?: string;
+  sortOrder?: number;
+  /** @min 1 */
+  version?: number;
+}
+
 export interface PatchUserRequest {
   /** @maxLength 2048 */
   avatarURL?: string;
@@ -2607,7 +2673,7 @@ export interface PatchUserRequest {
 export interface PatchUsernameRequest {
   /**
    * @minLength 3
-   * @maxLength 16
+   * @maxLength 32
    */
   username: string;
 }
@@ -2824,6 +2890,8 @@ export interface PublicModelListResponseDoc {
 }
 
 export interface PublicModelPricingResponse {
+  cacheWrite1hMultiplier: number;
+  cacheWrite5mMultiplier: number;
   cacheReadUSDPerMTokens: number;
   cacheWriteUSDPerMTokens: number;
   callUSDPerCall: number;
@@ -2833,6 +2901,9 @@ export interface PublicModelPricingResponse {
   isFree: boolean;
   mode: string;
   outputUSDPerMTokens: number;
+  /** 时段倍率按服务器本地时区定义；客户端用 scheduleUTCOffsetMinutes 判断当前命中的时段。 */
+  schedulePeriods: PublicSchedulePeriodResponse[];
+  scheduleUTCOffsetMinutes: number;
   tiers: PublicModelPricingTierResponse[];
 }
 
@@ -2862,6 +2933,14 @@ export interface PublicModelResponse {
   vendorName: string;
 }
 
+export interface PublicSchedulePeriodResponse {
+  end: string;
+  name: string;
+  ratePercent: number;
+  start: string;
+  weekdays: number[];
+}
+
 export interface PublicSharedConversationResponse {
   createdAt: string;
   defaultMessagePublicIDs: string[];
@@ -2870,6 +2949,8 @@ export interface PublicSharedConversationResponse {
   model: string;
   shareID: string;
   title: string;
+  /** UIComponentsEnabled 为 false 时，分享页不渲染 deeix-ui 组件块。 */
+  uiComponentsEnabled: boolean;
 }
 
 export interface PublicSharedConversationResponseDoc {
@@ -3174,6 +3255,11 @@ export interface SendMessageRequest {
   skillIDs?: number[];
   /** @maxLength 32 */
   sourceMessagePublicID?: string;
+  /**
+   * UIComponentIDs 是本次会话勾选的交互式组件；后端据此注入组件目录提示词，不可见的 ID 被忽略。
+   * @maxItems 32
+   */
+  uiComponentIDs?: number[];
 }
 
 export interface SendMessageResponse {
@@ -3515,6 +3601,11 @@ export interface TemporaryChatMessageRequest {
   sessionID: string;
   /** @maxItems 128 */
   skillIDs?: number[];
+  /**
+   * UIComponentIDs 是本次会话勾选的交互式组件。
+   * @maxItems 32
+   */
+  uiComponentIDs?: number[];
 }
 
 export interface ToolListResponse {
@@ -3547,6 +3638,54 @@ export interface ToolResponse {
 
 export interface ToolResponseDoc {
   data: ToolResponse;
+  errorMsg: string;
+}
+
+export interface UIComponentDataResponse {
+  component: UIComponentResponse;
+}
+
+export interface UIComponentDeleteDataResponse {
+  deleted: boolean;
+}
+
+export interface UIComponentDeleteResponseDoc {
+  data: UIComponentDeleteDataResponse;
+  errorMsg: string;
+}
+
+export interface UIComponentPageResponseDoc {
+  data: {
+    results: UIComponentResponse[];
+    total: number;
+  };
+  errorMsg: string;
+}
+
+export interface UIComponentResponse {
+  createdAt: string;
+  createdByUserID: number;
+  description: string;
+  enabled: boolean;
+  id: number;
+  name: string;
+  propsSchema: string;
+  propsSummary: string;
+  rendererKind: string;
+  rendererSource: string;
+  scope: string;
+  sortOrder: number;
+  updatedAt: string;
+  updatedByUserID: number;
+  version: number;
+}
+
+export interface UIComponentResponseDoc {
+  data: UIComponentDataResponse;
+  errorMsg: string;
+}
+
+export interface UicomponentErrorDoc {
   errorMsg: string;
 }
 
@@ -3842,6 +3981,7 @@ export interface UpsertMemoryResponse {
 export interface UpsertModelPricingRequest {
   /** @min 0 */
   cacheReadUSDPerMTokens: number;
+  cacheWritePriceBasis?: "direct" | "anthropic_5m";
   /** @min 0 */
   cacheWriteUSDPerMTokens: number;
   /** @min 0 */
@@ -3858,6 +3998,11 @@ export interface UpsertModelPricingRequest {
   /** @maxLength 128 */
   platformModelName: string;
   pricingMode: "token" | "call" | "duration" | "tiered";
+  /**
+   * SchedulePricingJSON 是时段倍率配置 {"periods":[{"name","weekdays","start","end","ratePercent"}]}，空表示不启用。
+   * @maxLength 20000
+   */
+  schedulePricingJSON?: string;
   /** @maxLength 20000 */
   tieredPricingJSON?: string;
 }
@@ -4390,6 +4535,23 @@ export interface WriteSkillRequest {
   trigger: string;
 }
 
+export interface WriteUIComponentRequest {
+  /** @maxLength 256 */
+  description: string;
+  enabled?: boolean;
+  /** @maxLength 64 */
+  name: string;
+  /** @maxLength 16384 */
+  propsSchema?: string;
+  /** @maxLength 1024 */
+  propsSummary: string;
+  /** @maxLength 262144 */
+  rendererSource: string;
+  sortOrder?: number;
+  /** @min 1 */
+  version?: number;
+}
+
 export namespace Admin {
   /**
    * @description 分页查询站点公告
@@ -4689,7 +4851,7 @@ export namespace Admin {
   }
 
   /**
-   * @description 从 storage 缓存读取 OpenRouter 模型标识、定价和上下文限制；缓存不存在、过期或 refresh=true 时由后端刷新。
+   * @description 从 storage 缓存读取 OpenRouter 模型标识、基础定价、输入 token 阶梯覆盖和上下文限制；无法映射到当前 token 计费模型的附加字段会在 unsupportedFields 中标记，快速配置会忽略这些字段并继续导入可识别的 token 价格。由原生工具计费负责的按次字段（例如 web_search）会被忽略。
    * @tags admin-billing
    * @name BillingOfficialPricingOpenrouterList
    * @summary 管理员获取 OpenRouter 官方模型目录
@@ -6951,7 +7113,7 @@ export namespace Admin {
   }
 
   /**
-   * No description
+   * @description include_empty=true 时同时重试提取无文本的 empty 文件，适用于更换 OCR 引擎后
    * @tags admin/settings
    * @name SettingsEmbeddingReindexCreate
    * @summary 触发向量重建（重索引所有 stale/failed 文件）
@@ -6960,10 +7122,13 @@ export namespace Admin {
    */
   export namespace SettingsEmbeddingReindexCreate {
     export type RequestParams = {};
-    export type RequestQuery = {};
+    export type RequestQuery = {
+      /** 是否包含 empty 终态文件 */
+      include_empty?: boolean;
+    };
     export type RequestBody = never;
     export type RequestHeaders = {};
-    export type ResponseBody = Envelope;
+    export type ResponseBody = EmbeddingReindexResponseDoc;
   }
 
   /**
@@ -6995,7 +7160,7 @@ export namespace Admin {
     export type RequestQuery = {};
     export type RequestBody = never;
     export type RequestHeaders = {};
-    export type ResponseBody = Envelope;
+    export type ResponseBody = EmbeddingIndexStatusResponseDoc;
   }
 
   /**
@@ -7289,6 +7454,87 @@ export namespace Admin {
     export type RequestBody = never;
     export type RequestHeaders = {};
     export type ResponseBody = SystemEventListResponseDoc;
+  }
+
+  /**
+   * No description
+   * @tags admin/ui-components
+   * @name UiComponentsList
+   * @summary 查询内置与平台组件
+   * @request GET:/admin/ui-components
+   * @secure
+   */
+  export namespace UiComponentsList {
+    export type RequestParams = {};
+    export type RequestQuery = {
+      /** 是否启用 */
+      enabled?: boolean;
+      /** 页码 */
+      page?: number;
+      /** 每页数量 */
+      page_size?: number;
+      /** 搜索关键词 */
+      q?: string;
+      /** 作用域：builtin 或 platform，留空为全部 */
+      scope?: string;
+    };
+    export type RequestBody = never;
+    export type RequestHeaders = {};
+    export type ResponseBody = UIComponentPageResponseDoc;
+  }
+
+  /**
+   * No description
+   * @tags admin/ui-components
+   * @name UiComponentsCreate
+   * @summary 创建平台组件
+   * @request POST:/admin/ui-components
+   * @secure
+   */
+  export namespace UiComponentsCreate {
+    export type RequestParams = {};
+    export type RequestQuery = {};
+    export type RequestBody = WriteUIComponentRequest;
+    export type RequestHeaders = {};
+    export type ResponseBody = UIComponentResponseDoc;
+  }
+
+  /**
+   * @description 内置组件受保护，不允许删除
+   * @tags admin/ui-components
+   * @name UiComponentsDelete
+   * @summary 删除平台组件
+   * @request DELETE:/admin/ui-components/{id}
+   * @secure
+   */
+  export namespace UiComponentsDelete {
+    export type RequestParams = {
+      /** 组件ID */
+      id: number;
+    };
+    export type RequestQuery = {};
+    export type RequestBody = never;
+    export type RequestHeaders = {};
+    export type ResponseBody = UIComponentDeleteResponseDoc;
+  }
+
+  /**
+   * @description 内置组件只允许修改启用状态、描述与排序
+   * @tags admin/ui-components
+   * @name UiComponentsPartialUpdate
+   * @summary 更新内置或平台组件
+   * @request PATCH:/admin/ui-components/{id}
+   * @secure
+   */
+  export namespace UiComponentsPartialUpdate {
+    export type RequestParams = {
+      /** 组件ID */
+      id: number;
+    };
+    export type RequestQuery = {};
+    export type RequestBody = PatchUIComponentRequest;
+    export type RequestHeaders = {};
+    export type ResponseBody = UIComponentResponseDoc;
   }
 
   /**
@@ -8570,6 +8816,27 @@ export namespace Conversations {
   }
 
   /**
+   * @description 删除会话中任意位置的一条消息；其子消息将重接到被删消息的父消息上，后续消息保留并向前衔接。会话第一条消息与生成中的消息不允许删除
+   * @tags chat
+   * @name MessagesDelete
+   * @summary 删除指定消息
+   * @request DELETE:/conversations/{id}/messages/{message_id}
+   * @secure
+   */
+  export namespace MessagesDelete {
+    export type RequestParams = {
+      /** 会话 public_id */
+      id: string;
+      /** 消息 public_id */
+      messageId: string;
+    };
+    export type RequestQuery = {};
+    export type RequestBody = never;
+    export type RequestHeaders = {};
+    export type ResponseBody = MessageDeleteResponseDoc;
+  }
+
+  /**
    * @description 仅允许从助手消息 fork；将会话从开头到指定助手消息（含）的祖先链复制为一个新会话，保留历史展示轨迹；不携带原会话的运行记录与计费，附件以引用方式复用
    * @tags chat
    * @name MessagesForkCreate
@@ -9823,6 +10090,110 @@ export namespace TemporaryChat {
     export type RequestBody = TemporaryChatMessageRequest;
     export type RequestHeaders = {};
     export type ResponseBody = string;
+  }
+}
+
+export namespace UiComponents {
+  /**
+   * @description 返回已启用的内置、平台组件与当前用户自定义组件，含渲染源，用于会话勾选与消息渲染
+   * @tags ui-components
+   * @name UiComponentsList
+   * @summary 查询当前用户可用的交互式组件
+   * @request GET:/ui-components
+   * @secure
+   */
+  export namespace UiComponentsList {
+    export type RequestParams = {};
+    export type RequestQuery = {
+      /** 页码 */
+      page?: number;
+      /** 每页数量 */
+      page_size?: number;
+      /** 搜索关键词 */
+      q?: string;
+    };
+    export type RequestBody = never;
+    export type RequestHeaders = {};
+    export type ResponseBody = UIComponentPageResponseDoc;
+  }
+
+  /**
+   * No description
+   * @tags ui-components
+   * @name MineList
+   * @summary 查询我的自定义组件
+   * @request GET:/ui-components/mine
+   * @secure
+   */
+  export namespace MineList {
+    export type RequestParams = {};
+    export type RequestQuery = {
+      /** 是否启用 */
+      enabled?: boolean;
+      /** 页码 */
+      page?: number;
+      /** 每页数量 */
+      page_size?: number;
+      /** 搜索关键词 */
+      q?: string;
+    };
+    export type RequestBody = never;
+    export type RequestHeaders = {};
+    export type ResponseBody = UIComponentPageResponseDoc;
+  }
+
+  /**
+   * No description
+   * @tags ui-components
+   * @name MineCreate
+   * @summary 创建我的自定义组件
+   * @request POST:/ui-components/mine
+   * @secure
+   */
+  export namespace MineCreate {
+    export type RequestParams = {};
+    export type RequestQuery = {};
+    export type RequestBody = WriteUIComponentRequest;
+    export type RequestHeaders = {};
+    export type ResponseBody = UIComponentResponseDoc;
+  }
+
+  /**
+   * No description
+   * @tags ui-components
+   * @name MineDelete
+   * @summary 删除我的自定义组件
+   * @request DELETE:/ui-components/mine/{id}
+   * @secure
+   */
+  export namespace MineDelete {
+    export type RequestParams = {
+      /** 组件ID */
+      id: number;
+    };
+    export type RequestQuery = {};
+    export type RequestBody = never;
+    export type RequestHeaders = {};
+    export type ResponseBody = UIComponentDeleteResponseDoc;
+  }
+
+  /**
+   * No description
+   * @tags ui-components
+   * @name MinePartialUpdate
+   * @summary 更新我的自定义组件
+   * @request PATCH:/ui-components/mine/{id}
+   * @secure
+   */
+  export namespace MinePartialUpdate {
+    export type RequestParams = {
+      /** 组件ID */
+      id: number;
+    };
+    export type RequestQuery = {};
+    export type RequestBody = PatchUIComponentRequest;
+    export type RequestHeaders = {};
+    export type ResponseBody = UIComponentResponseDoc;
   }
 }
 

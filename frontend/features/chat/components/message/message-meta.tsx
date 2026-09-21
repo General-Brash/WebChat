@@ -28,8 +28,10 @@ import { Heart } from "@/components/animate-ui/icons/heart";
 import { RotateCcw } from "@/components/animate-ui/icons/rotate-ccw";
 import { ThumbsDown } from "@/components/animate-ui/icons/thumbs-down";
 import { ThumbsUp } from "@/components/animate-ui/icons/thumbs-up";
+import { Trash2 } from "@/components/animate-ui/icons/trash-2";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -49,6 +51,7 @@ import { usePointerInteraction } from "@/shared/hooks/use-pointer-interaction";
 import type { BillingDisplayCurrency, BillingDisplayLabels, BillingDisplayOptions } from "@/shared/lib/billing-display";
 import {
   billingRateMultiplierNote,
+  billingScheduleNote,
   cacheWriteBillingLabel,
   cacheWriteBillingNote,
   formatBillingDisplayCompactAmountFromUSD,
@@ -61,6 +64,7 @@ const META_ACTION_BUTTON_CLASSNAME =
 
 export type ChatMetaMessage = {
   publicID: string;
+  parentPublicID?: string | null;
   status?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -304,6 +308,64 @@ function ForkMessageButton({
   );
 }
 
+function DeleteMessageButton({
+  disabled = false,
+  label,
+  confirmTitle,
+  confirmDescription,
+  confirmAction,
+  cancelAction,
+  onDelete,
+}: {
+  disabled?: boolean;
+  label: string;
+  confirmTitle: string;
+  confirmDescription: string;
+  confirmAction: string;
+  cancelAction: string;
+  onDelete: () => Promise<void> | void;
+}) {
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const [inFlight, setInFlight] = React.useState(false);
+
+  const handleDelete = React.useCallback(async () => {
+    if (inFlight) {
+      return;
+    }
+    setInFlight(true);
+    try {
+      await onDelete();
+      setConfirmOpen(false);
+    } finally {
+      setInFlight(false);
+    }
+  }, [inFlight, onDelete]);
+
+  return (
+    <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+      <MetaIconButton
+        label={label}
+        disabled={disabled}
+        onClick={() => setConfirmOpen(true)}
+      >
+        <Trash2 size={14} strokeWidth={1.8} animateOnHover="shake" />
+      </MetaIconButton>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{confirmTitle}</AlertDialogTitle>
+          <AlertDialogDescription>{confirmDescription}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={inFlight}>{cancelAction}</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" disabled={inFlight} onClick={() => void handleDelete()}>
+            {confirmAction}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 export function UserMessageMeta({
   item,
   showRetry,
@@ -311,6 +373,7 @@ export function UserMessageMeta({
   onRetry,
   onEdit,
   onCopy,
+  onDelete,
   copySucceeded = false,
   readOnly = false,
   alwaysVisible = false,
@@ -322,6 +385,7 @@ export function UserMessageMeta({
   onRetry: () => void;
   onEdit: () => void;
   onCopy: () => void;
+  onDelete?: () => Promise<void> | void;
   copySucceeded?: boolean;
   readOnly?: boolean;
   alwaysVisible?: boolean;
@@ -366,6 +430,18 @@ export function UserMessageMeta({
               <Copy strokeWidth={1.8} animateOnHover="default" />
             )}
           </MetaIconButton>
+          {/* 根消息（parentPublicID 为空）后端禁止删除，前端直接不展示入口。 */}
+          {onDelete && hasPersistedMessage && item.parentPublicID ? (
+            <DeleteMessageButton
+              disabled={messagePending}
+              label={t("deleteMessage")}
+              confirmTitle={t("deleteConfirmTitle")}
+              confirmDescription={t("deleteConfirmDescription")}
+              confirmAction={t("deleteConfirmAction")}
+              cancelAction={t("deleteCancelAction")}
+              onDelete={onDelete}
+            />
+          ) : null}
         </div>
       ) : null}
       {canShowBranchNavigator ? <BranchSwitcher item={item} onCycle={onCycleBranch} /> : null}
@@ -569,6 +645,7 @@ function useBillingMetaLabels(): BillingMetaLabels {
         claudeCacheWriteNote: (timeout, multiplier) => t("claudeCacheWriteNote", { timeout, multiplier }),
         claudeFastModeNote: (multiplier) => t("claudeFastModeNote", { multiplier }),
         openaiServiceTierNote: (tier, multiplier) => t("openaiServiceTierNote", { tier, multiplier }),
+        scheduleRateNote: (period: string, multiplier: string) => t("scheduleRateNote", { period, multiplier }),
         cacheWritePricingLabel: t("cacheWritePricingLabel"),
         cacheWritePricingNote: t("cacheWritePricingNote"),
       },
@@ -711,6 +788,7 @@ function billingTooltipLines(item: ChatMetaMessage, labels: BillingMetaLabels, b
   const cacheWriteLabel = cacheWriteBillingLabel(snapshot, labels.display);
   const cacheWriteNote = cacheWriteBillingNote(snapshot, labels.display);
   const rateMultiplierNote = billingRateMultiplierNote(snapshot, labels.display);
+  const scheduleNote = billingScheduleNote(snapshot, labels.display);
 
   if (pricingMode === "tiered") {
     const tieredRows = [
@@ -721,9 +799,12 @@ function billingTooltipLines(item: ChatMetaMessage, labels: BillingMetaLabels, b
       ...billingServiceItemTableRows(serviceEntries, labels, billingDisplay),
     ];
     const lines: BillingTooltipLine[] = [];
-    if (rateMultiplierNote || cacheWriteNote) {
+    if (rateMultiplierNote || scheduleNote || cacheWriteNote) {
       if (rateMultiplierNote) {
         lines.push({ type: "row", left: labels.rateNote, right: rateMultiplierNote });
+      }
+      if (scheduleNote) {
+        lines.push({ type: "row", left: labels.rateNote, right: scheduleNote });
       }
       if (cacheWriteNote) {
         lines.push({ type: "row", left: labels.cacheNote, right: cacheWriteNote });
@@ -753,6 +834,9 @@ function billingTooltipLines(item: ChatMetaMessage, labels: BillingMetaLabels, b
   const noteLines: BillingTooltipLine[] = [];
   if (rateMultiplierNote) {
     noteLines.push({ type: "row", left: labels.rateNote, right: rateMultiplierNote });
+  }
+  if (scheduleNote) {
+    noteLines.push({ type: "row", left: labels.rateNote, right: scheduleNote });
   }
   if (cacheWriteNote) {
     noteLines.push({ type: "row", left: labels.cacheNote, right: cacheWriteNote });
@@ -947,6 +1031,7 @@ export function AssistantMessageMeta({
   onEdit,
   onCopy,
   onFork,
+  onDelete,
   copySucceeded = false,
   onReact,
   showModelInfo = true,
@@ -968,6 +1053,7 @@ export function AssistantMessageMeta({
   onEdit?: () => void;
   onCopy: () => void;
   onFork?: () => Promise<void> | void;
+  onDelete?: () => Promise<void> | void;
   copySucceeded?: boolean;
   onReact: (value: AssistantReaction) => void;
   showModelInfo?: boolean;
@@ -993,6 +1079,8 @@ export function AssistantMessageMeta({
   const canEdit = Boolean(canRetry && !busy && onEdit);
   const canContinue = Boolean(canRetry && !busy && item.status === "interrupted");
   const canFork = Boolean(canRetry && onFork);
+  // 根消息（parentPublicID 为空）后端禁止删除，前端直接不展示入口。
+  const canDelete = Boolean(canRetry && !busy && onDelete && item.parentPublicID);
   const canShowBranchNavigator = Boolean(showBranchNavigator && item.branchNavigator);
   const hasTokenUsage = Boolean(
     (item.inputTokens ?? 0) > 0 ||
@@ -1091,6 +1179,16 @@ export function AssistantMessageMeta({
                   >
                     <RotateCcw strokeWidth={1.8} animateOnHover="default" />
                   </MetaIconButton>
+                ) : null}
+                {canDelete && onDelete ? (
+                  <DeleteMessageButton
+                    label={t("deleteMessage")}
+                    confirmTitle={t("deleteConfirmTitle")}
+                    confirmDescription={t("deleteConfirmDescription")}
+                    confirmAction={t("deleteConfirmAction")}
+                    cancelAction={t("deleteCancelAction")}
+                    onDelete={onDelete}
+                  />
                 ) : null}
                 {canContinue && onContinue ? (
                   <MetaIconButton

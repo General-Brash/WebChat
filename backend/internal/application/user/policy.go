@@ -8,7 +8,7 @@ import (
 
 const (
 	UsernameMinLength    = 3
-	UsernameMaxLength    = 16
+	UsernameMaxLength    = 32
 	DisplayNameMinLength = 3
 	DisplayNameMaxLength = 16
 	PasswordMinLength    = 8

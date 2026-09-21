@@ -200,7 +200,7 @@
     "createDescription": "Create a standard user account with initial credentials and profile details.",
     "manageTitle": "Manage user",
     "username": "Username",
-    "usernamePlaceholder": "3-16 character username",
+    "usernamePlaceholder": "3-32 character username",
     "displayName": "Display name",
     "displayNamePlaceholder": "3-16 character display name",
     "userDisplayNamePlaceholder": "User display name",
@@ -246,7 +246,7 @@
     "selectSubscriptionPlan": "Select a subscription plan.",
     "invalidUsageBalance": "Enter a valid usage balance.",
     "passwordMinLength": "The new password must be at least 8 characters and not digits only.",
-    "usernameLength": "Username must be 3-16 characters.",
+    "usernameLength": "Username must be 3-32 characters.",
     "displayNameLength": "Display name must be 3-16 characters."
   },
   "toast": {

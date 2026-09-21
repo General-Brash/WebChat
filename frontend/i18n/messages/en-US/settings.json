@@ -40,7 +40,7 @@
       "conversationPreferencesPlaceholder": "Preferred style, language habits, output format, and common workflows."
     },
     "username": {
-      "invalid": "Username must be 3-16 lowercase letters, numbers, underscores, or hyphens and cannot use a reserved name.",
+      "invalid": "Username must be 3-32 lowercase letters, numbers, underscores, or hyphens and cannot use a reserved name.",
       "alreadyChanged": "Username can only be set once.",
       "taken": "This username is already taken."
     },
@@ -90,7 +90,17 @@
         "standard": "Standard",
         "medium": "Medium",
         "large": "Large"
-      }
+      },
+      "toastPosition": "Notification position",
+      "toastPositionOption": {
+        "top-left": "Top left",
+        "top-center": "Top center",
+        "top-right": "Top right",
+        "bottom-left": "Bottom left",
+        "bottom-center": "Bottom center",
+        "bottom-right": "Bottom right"
+      },
+      "toastPositionPreview": "Notifications will appear here"
     },
     "avatarDialog": {
       "title": "Edit avatar",
@@ -582,6 +592,7 @@
       "claudeCacheWriteNote": "Claude {timeout} cache write uses configured pricing at {multiplier}.",
       "claudeFastModeNote": "Claude Fast Mode bills input, output, and cache usage at {multiplier}.",
       "openaiServiceTierNote": "OpenAI service_tier={tier} bills at {multiplier}.",
+      "scheduleRateNote": "Time-of-day rate \"{period}\": billed at {multiplier}.",
       "baseService": "Base service",
       "input": "Input",
       "output": "Output",

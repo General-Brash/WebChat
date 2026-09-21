@@ -90,7 +90,7 @@
   },
   "toasts": {
     "startTwoFactorFailed": "Failed to start two-factor authentication",
-    "usernameTooShort": "Enter a username with 3-16 characters",
+    "usernameTooShort": "Enter a username with 3-32 characters",
     "changeInitialUsername": "Change the initial username",
     "displayNameRequired": "Enter a display name with 3-16 characters",
     "passwordTooShort": "Enter a new password with at least 8 characters and not digits only",

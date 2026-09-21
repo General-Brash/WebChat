@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { useAutoExpandDisclosure } from "@/shared/hooks/use-auto-expand-disclosure";
 import {
   AdaptiveMarkdownTable,
+  MarkdownTableLineBreak,
   MarkdownTableStreamingContext,
 } from "./adaptive-markdown-table";
 import { StreamdownAdapterStyles } from "./streamdown-adapter-styles";
@@ -53,6 +54,7 @@ import {
   normalizeLatexUnicodeSymbols,
   normalizeMathDelimiters,
   normalizeMermaidBlocks,
+  normalizeNestedCodeFences,
   parseStreamdownSegments,
   type RenderSegment,
 } from "./streamdown-content";
@@ -344,9 +346,9 @@ const THINKING_MARKDOWN_CLASSNAME = cn(
 
 const USER_MARKDOWN_CLASSNAME = cn(
   BASE_MARKDOWN_CLASSNAME,
-  "leading-8",
-  "[&_p]:whitespace-pre-wrap [&_p]:leading-8",
-  "[&_li]:leading-7",
+  "leading-6",
+  "[&_p]:whitespace-pre-wrap [&_p]:leading-6",
+  "[&_li]:leading-6",
   "[&_ul]:my-1 [&_ul]:pl-5",
   "[&_ol]:my-1 [&_ol]:pl-5",
   "[&_h1]:my-1 [&_h1]:text-[17px] [&_h1]:font-semibold [&_h1]:leading-7",
@@ -365,6 +367,7 @@ const DEFAULT_STREAMDOWN_COMPONENTS = {
   article: MarkdownHTMLArticle,
   aside: MarkdownHTMLAside,
   b: MarkdownStrong,
+  br: MarkdownTableLineBreak,
   details: MarkdownHTMLDetails,
   div: MarkdownHTMLDiv,
   img: MarkdownImage,
@@ -390,6 +393,34 @@ const THINKING_STREAMDOWN_COMPONENTS = {
   h6: ThinkingHeading,
 } as const;
 
+const USER_BLOCK_LINE_RE = /^\s*(?:[-*+]\s|\d+[.)]\s|>|#{1,6}\s|\||```|~~~)/;
+
+// In a typed message a single Enter means a new paragraph, but Markdown folds
+// it into the previous line. Promote single line breaks between two plain
+// text lines to paragraph breaks; list items, quotes, headings, table rows and
+// fenced code keep their single newlines because there they are structural.
+function normalizeUserLineBreaks(content: string): string {
+  const lines = content.split("\n");
+  const out: string[] = [];
+  let inFence = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    out.push(line);
+    if (/^\s*(?:```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    const next = lines[index + 1];
+    if (inFence || next === undefined || line.trim() === "" || next.trim() === "") {
+      continue;
+    }
+    if (!USER_BLOCK_LINE_RE.test(line) && !USER_BLOCK_LINE_RE.test(next)) {
+      out.push("");
+    }
+  }
+  return out.join("\n");
+}
+
 function normalizeStreamdownContent(
   content: unknown,
   preserveSourceLines = false,
@@ -403,9 +434,12 @@ function normalizeStreamdownContent(
       preserveSourceLines ? escapedContent : normalizeMathDelimiters(escapedContent),
     ),
   );
-  return preserveSourceLines
+  const fenceNormalizedContent = preserveSourceLines
     ? normalizedContent
-    : normalizeHTMLBlockBlankLines(normalizeHTMLVisualMarkdownFences(normalizedContent), streaming);
+    : normalizeNestedCodeFences(normalizedContent);
+  return preserveSourceLines
+    ? fenceNormalizedContent
+    : normalizeHTMLBlockBlankLines(normalizeHTMLVisualMarkdownFences(fenceNormalizedContent), streaming);
 }
 
 function detectStreamdownFeatures(content: string): StreamdownFeatureFlags {
@@ -663,10 +697,10 @@ export const StreamdownRender = React.memo(function StreamdownRender({
   imageActions,
   artifactActions,
 }: StreamdownRenderProps) {
-  const normalizedContent = React.useMemo(
-    () => normalizeStreamdownContent(content, sourcePositions, streaming),
-    [content, sourcePositions, streaming],
-  );
+  const normalizedContent = React.useMemo(() => {
+    const normalized = normalizeStreamdownContent(content, sourcePositions, streaming);
+    return variant === "user" ? normalizeUserLineBreaks(normalized) : normalized;
+  }, [content, sourcePositions, streaming, variant]);
   const plugins = useStreamdownPlugins(normalizedContent);
   const segments = React.useMemo(
     () =>
@@ -705,7 +739,7 @@ export const StreamdownRender = React.memo(function StreamdownRender({
     [thinkingSegments],
   );
   const contentSpacingClassName =
-    variant === "thinking" ? "space-y-1.5 leading-6" : variant === "user" ? "space-y-2 leading-8" : "space-y-3 leading-8";
+    variant === "thinking" ? "space-y-1.5 leading-6" : variant === "user" ? "space-y-3 leading-6" : "space-y-3 leading-8";
   const activeMarkdownClassName =
     variant === "thinking"
       ? THINKING_MARKDOWN_CLASSNAME

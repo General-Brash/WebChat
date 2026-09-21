@@ -7,7 +7,7 @@ func TestNormalizeUsernamePolicy(t *testing.T) {
 		t.Fatalf("expected normalized username, got %q err=%v", got, err)
 	}
 
-	for _, raw := range []string{"ab", "abcdefghijklmnopq", "admin", "user@example.com", "-alice", "alice.", "alice_"} {
+	for _, raw := range []string{"ab", "abcdefghijklmnopqrstuvwxyzabcdefg", "admin", "user@example.com", "-alice", "alice.", "alice_"} {
 		if _, err := NormalizeUsername(raw); err == nil {
 			t.Fatalf("expected %q to be rejected", raw)
 		}

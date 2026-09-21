@@ -95,6 +95,7 @@ func (h *Handler) parseSendMessageInput(c *gin.Context) (appconversation.SendMes
 		SkillIDs:                req.SkillIDs,
 		KnowledgeBaseIDs:        req.KnowledgeBaseIDs,
 		HTMLVisualPromptEnabled: req.HTMLVisualPromptEnabled,
+		UIComponentIDs:          req.UIComponentIDs,
 		ParentMessagePublicID:   req.ParentMessagePublicID,
 		SourceMessagePublicID:   req.SourceMessagePublicID,
 		BranchReason:            req.BranchReason,
@@ -203,6 +204,7 @@ func handleSendMessageError(c *gin.Context, err error) {
 // @Success 200 {object} SendMessageResponseDoc
 // @Failure 400 {object} ErrorDoc
 // @Failure 404 {object} ErrorDoc
+// @Failure 409 {object} ErrorDoc
 // @Failure 500 {object} ErrorDoc
 // @Router /conversations/{id}/messages [post]
 // SendMessage 发送消息。

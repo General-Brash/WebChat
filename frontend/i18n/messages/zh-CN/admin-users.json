@@ -200,7 +200,7 @@
     "createDescription": "新增普通用户账号，初始化登录凭据与基础资料。",
     "manageTitle": "管理用户",
     "username": "用户名",
-    "usernamePlaceholder": "3-16 位用户名",
+    "usernamePlaceholder": "3-32 位用户名",
     "displayName": "昵称",
     "displayNamePlaceholder": "3-16 位昵称",
     "userDisplayNamePlaceholder": "用户昵称",
@@ -246,7 +246,7 @@
     "selectSubscriptionPlan": "请选择订阅方案。",
     "invalidUsageBalance": "请输入有效的按量余额。",
     "passwordMinLength": "新密码至少 8 位，且不能为纯数字。",
-    "usernameLength": "用户名需为 3-16 位。",
+    "usernameLength": "用户名需为 3-32 位。",
     "displayNameLength": "昵称需为 3-16 位。"
   },
   "toast": {

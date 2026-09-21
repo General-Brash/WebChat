@@ -28,6 +28,7 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
+  DialogHeightTransition,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -40,6 +41,7 @@ import {
   SkillsSection,
   type SkillsSectionHandle,
 } from "@/features/prompts/components/sections/skills-section";
+import { UIComponentsSection, type UIComponentsSectionHandle } from "@/features/prompts/components/sections/ui-components-section";
 import {
   promptPresetKey,
   useSkillsPromptPage,
@@ -152,6 +154,8 @@ export function SkillsPromptPage() {
   const commonStatesT = useTranslations("common.states");
   const [activeTab, setActiveTab] = React.useState("skills");
   const skillsSectionRef = React.useRef<SkillsSectionHandle>(null);
+  const componentsSectionRef = React.useRef<UIComponentsSectionHandle>(null);
+  const uiT = useTranslations("uiComponents");
   const {
     items,
     filteredItems,
@@ -245,6 +249,11 @@ export function SkillsPromptPage() {
                 <Plus className="size-4" />
                 {t("add")}
               </Button>
+            ) : activeTab === "components" ? (
+              <Button size="sm" variant="default" className="shrink-0" onClick={() => componentsSectionRef.current?.openCreate()}>
+                <Plus className="size-4" />
+                {t("add")}
+              </Button>
             ) : (
               <Button size="sm" variant="default" className="shrink-0" disabled={loading} onClick={openCreate}>
                 <Plus className="size-4" />
@@ -257,6 +266,7 @@ export function SkillsPromptPage() {
             <TabsList>
               <TabsTrigger value="skills">{t("skillsTab")}</TabsTrigger>
               <TabsTrigger value="prompts">{t("promptsTab")}</TabsTrigger>
+              <TabsTrigger value="components">{uiT("types.components")}</TabsTrigger>
             </TabsList>
           </Tabs>
 
@@ -265,7 +275,7 @@ export function SkillsPromptPage() {
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder={activeTab === "skills" ? t("skillsSearchPlaceholder") : t("searchPlaceholder")}
+              placeholder={activeTab === "skills" ? t("skillsSearchPlaceholder") : activeTab === "components" ? uiT("searchPlaceholder") : t("searchPlaceholder")}
               className="rounded-xl bg-background pl-9"
             />
           </div>
@@ -274,6 +284,9 @@ export function SkillsPromptPage() {
         <Tabs value={activeTab} onValueChange={setActiveTab} className="min-h-0 flex-1">
           <TabsContent value="skills" className="flex h-full min-h-0">
             <SkillsSection ref={skillsSectionRef} query={query} />
+          </TabsContent>
+          <TabsContent value="components" className="flex h-full min-h-0">
+            <UIComponentsSection ref={componentsSectionRef} query={query} />
           </TabsContent>
           <TabsContent value="prompts" className="flex h-full min-h-0">
             <section className="mt-6 flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -290,87 +303,91 @@ export function SkillsPromptPage() {
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={(open) => !saving && setDialogOpen(open)}>
-        <DialogContent className="flex max-h-[min(86vh,760px)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[560px]">
-          <DialogHeader className="shrink-0 px-5 pb-3 pt-5">
-            <DialogTitle>{form.id ? t("editTitle") : t("createTitle")}</DialogTitle>
-            <DialogDescription>{t("dialogDescription")}</DialogDescription>
-          </DialogHeader>
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-2">
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">{t("name")}</p>
-              <InputGroup>
-                <InputGroupAddon>/</InputGroupAddon>
-                <InputGroupInput
-                  value={form.name}
-                  placeholder="musk"
-                  maxLength={PROMPT_PRESET_LIMITS.name}
-                  onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+        <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-[560px]">
+          <DialogHeightTransition contentClassName="max-h-[min(86vh,760px)]">
+            <DialogHeader className="shrink-0 px-5 pb-3 pt-5">
+              <DialogTitle>{form.id ? t("editTitle") : t("createTitle")}</DialogTitle>
+              <DialogDescription>{t("dialogDescription")}</DialogDescription>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-2">
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{t("name")}</p>
+                <InputGroup>
+                  <InputGroupAddon>/</InputGroupAddon>
+                  <InputGroupInput
+                    value={form.name}
+                    placeholder="musk"
+                    maxLength={PROMPT_PRESET_LIMITS.name}
+                    onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                  />
+                </InputGroup>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{t("promptDescription")}</p>
+                <Input
+                  value={form.description}
+                  maxLength={PROMPT_PRESET_LIMITS.description}
+                  onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
                 />
-              </InputGroup>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{t("content")}</p>
+                <Textarea
+                  value={form.content}
+                  className="h-64 resize-none overflow-y-auto [field-sizing:fixed]"
+                  maxLength={PROMPT_PRESET_LIMITS.content}
+                  onChange={(event) => setForm((current) => ({ ...current, content: event.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{t("enabled")}</p>
+                <Switch
+                  size="sm"
+                  checked={form.enabled}
+                  disabled={saving}
+                  onCheckedChange={(enabled) => setForm((current) => ({ ...current, enabled }))}
+                />
+              </div>
             </div>
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">{t("promptDescription")}</p>
-              <Input
-                value={form.description}
-                maxLength={PROMPT_PRESET_LIMITS.description}
-                onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
-              />
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">{t("content")}</p>
-              <Textarea
-                value={form.content}
-                className="h-64 resize-none overflow-y-auto [field-sizing:fixed]"
-                maxLength={PROMPT_PRESET_LIMITS.content}
-                onChange={(event) => setForm((current) => ({ ...current, content: event.target.value }))}
-              />
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">{t("enabled")}</p>
-              <Switch
-                size="sm"
-                checked={form.enabled}
-                disabled={saving}
-                onCheckedChange={(enabled) => setForm((current) => ({ ...current, enabled }))}
-              />
-            </div>
-          </div>
-          <DialogFooter className="shrink-0 px-5 py-3">
-            <Button variant="ghost" disabled={saving} onClick={() => setDialogOpen(false)}>
-              {t("cancel")}
-            </Button>
-            <Button disabled={saving} onClick={() => void save()}>
-              {saving ? t("saving") : t("save")}
-            </Button>
-          </DialogFooter>
+            <DialogFooter className="shrink-0 px-5 py-3">
+              <Button variant="ghost" disabled={saving} onClick={() => setDialogOpen(false)}>
+                {t("cancel")}
+              </Button>
+              <Button disabled={saving} onClick={() => void save()}>
+                {saving ? t("saving") : t("save")}
+              </Button>
+            </DialogFooter>
+          </DialogHeightTransition>
         </DialogContent>
       </Dialog>
 
       <Dialog open={viewTarget !== null} onOpenChange={(open) => !open && setViewTarget(null)}>
-        <DialogContent className="flex max-h-[min(86vh,760px)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[560px]">
-          <DialogHeader className="shrink-0 px-5 pb-3 pt-5">
-            <DialogTitle>{stableViewTarget?.trigger || stableViewTarget?.title}</DialogTitle>
-            <DialogDescription>{t("viewDescription")}</DialogDescription>
-          </DialogHeader>
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-2">
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">{t("name")}</p>
-              <Input value={stableViewTarget?.trigger || stableViewTarget?.title || ""} readOnly />
+        <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-[560px]">
+          <DialogHeightTransition contentClassName="max-h-[min(86vh,760px)]">
+            <DialogHeader className="shrink-0 px-5 pb-3 pt-5">
+              <DialogTitle>{stableViewTarget?.trigger || stableViewTarget?.title}</DialogTitle>
+              <DialogDescription>{t("viewDescription")}</DialogDescription>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-2">
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{t("name")}</p>
+                <Input value={stableViewTarget?.trigger || stableViewTarget?.title || ""} readOnly />
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{t("promptDescription")}</p>
+                <Input value={stableViewTarget?.description || ""} readOnly />
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{t("content")}</p>
+                <Textarea value={stableViewTarget?.content || ""} className="h-64 resize-none overflow-y-auto [field-sizing:fixed]" readOnly />
+              </div>
             </div>
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">{t("promptDescription")}</p>
-              <Input value={stableViewTarget?.description || ""} readOnly />
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">{t("content")}</p>
-              <Textarea value={stableViewTarget?.content || ""} className="h-64 resize-none overflow-y-auto [field-sizing:fixed]" readOnly />
-            </div>
-          </div>
-          <DialogFooter className="shrink-0 px-5 py-3">
-            <Button variant="ghost" onClick={() => setViewTarget(null)}>
-              {t("close")}
-            </Button>
-          </DialogFooter>
+            <DialogFooter className="shrink-0 px-5 py-3">
+              <Button variant="ghost" onClick={() => setViewTarget(null)}>
+                {t("close")}
+              </Button>
+            </DialogFooter>
+          </DialogHeightTransition>
         </DialogContent>
       </Dialog>
 

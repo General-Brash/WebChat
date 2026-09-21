@@ -387,6 +387,9 @@ type PublicSharedConversationResponse struct {
 	LastAccessedAt          *time.Time                    `json:"lastAccessedAt" extensions:"x-nullable,!x-omitempty"`
 	DefaultMessagePublicIDs []string                      `json:"defaultMessagePublicIDs"`
 	Messages                []PublicSharedMessageResponse `json:"messages"`
+
+	// UIComponentsEnabled 为 false 时，分享页不渲染 deeix-ui 组件块。
+	UIComponentsEnabled bool `json:"uiComponentsEnabled"`
 }
 
 func toPublicSharedConversationResponse(item *appconversation.PublicSharedConversationResult) PublicSharedConversationResponse {
@@ -402,6 +405,8 @@ func toPublicSharedConversationResponse(item *appconversation.PublicSharedConver
 		LastAccessedAt:          item.LastAccessedAt,
 		DefaultMessagePublicIDs: item.DefaultMessageIDs,
 		Messages:                messages,
+
+		UIComponentsEnabled: item.UIComponentsEnabled,
 	}
 }
 
@@ -410,6 +415,12 @@ type ConversationDeleteResponse struct {
 	Deleted          bool                  `json:"deleted"`
 	DeletedFileCount int                   `json:"deletedFileCount,omitempty"`
 	Quota            *StorageQuotaResponse `json:"quota,omitempty"`
+}
+
+// MessageDeleteResponse 删除消息响应 DTO。
+type MessageDeleteResponse struct {
+	Deleted                bool  `json:"deleted"`
+	ReparentedMessageCount int64 `json:"reparentedMessageCount"`
 }
 
 func toConversationDeleteResponse(result *appconversation.DeleteConversationResult) ConversationDeleteResponse {
@@ -1635,6 +1646,12 @@ type ConversationUpdateResponseDoc struct {
 type ConversationDeleteResponseDoc struct {
 	ErrorMsg string                     `json:"errorMsg"`
 	Data     ConversationDeleteResponse `json:"data"`
+}
+
+// MessageDeleteResponseDoc 删除消息响应文档。
+type MessageDeleteResponseDoc struct {
+	ErrorMsg string                `json:"errorMsg"`
+	Data     MessageDeleteResponse `json:"data"`
 }
 
 // ConversationShareResponseDoc 会话分享响应文档。

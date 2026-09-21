@@ -90,7 +90,7 @@
   },
   "toasts": {
     "startTwoFactorFailed": "启动两步验证失败",
-    "usernameTooShort": "请输入 3-16 位用户名",
+    "usernameTooShort": "请输入 3-32 位用户名",
     "changeInitialUsername": "请修改初始化用户名",
     "displayNameRequired": "请输入 3-16 位昵称",
     "passwordTooShort": "请输入至少 8 位且不能为纯数字的新密码",
