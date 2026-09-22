@@ -1429,10 +1429,12 @@ func (r *Repo) UpsertModelPricing(ctx context.Context, item *domainbilling.Model
 		"input_nanousd_per_m_tokens":       clampNonNegative(item.InputNanousdPerMTokens),
 		"cache_read_nanousd_per_m_tokens":  clampNonNegative(item.CacheReadNanousdPerMTokens),
 		"cache_write_nanousd_per_m_tokens": clampNonNegative(item.CacheWriteNanousdPerMTokens),
+		"cache_write_price_basis":          item.CacheWritePriceBasis,
 		"output_nanousd_per_m_tokens":      clampNonNegative(item.OutputNanousdPerMTokens),
 		"call_nanousd_per_call":            clampNonNegative(item.CallNanousdPerCall),
 		"duration_nanousd_per_second":      clampNonNegative(item.DurationNanousdPerSecond),
 		"tiered_pricing_json":              strings.TrimSpace(item.TieredPricingJSON),
+		"schedule_pricing_json":            emptyJSONObject(item.SchedulePricingJSON),
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		record = model.ModelPricing{
@@ -2202,13 +2204,24 @@ func toDomainModelPricing(item model.ModelPricing) domainbilling.ModelPricing {
 		InputNanousdPerMTokens:      item.InputNanousdPerMTokens,
 		CacheReadNanousdPerMTokens:  item.CacheReadNanousdPerMTokens,
 		CacheWriteNanousdPerMTokens: item.CacheWriteNanousdPerMTokens,
+		CacheWritePriceBasis:        item.CacheWritePriceBasis,
 		OutputNanousdPerMTokens:     item.OutputNanousdPerMTokens,
 		CallNanousdPerCall:          item.CallNanousdPerCall,
 		DurationNanousdPerSecond:    item.DurationNanousdPerSecond,
 		TieredPricingJSON:           item.TieredPricingJSON,
+		SchedulePricingJSON:         item.SchedulePricingJSON,
 		CreatedAt:                   item.CreatedAt,
 		UpdatedAt:                   item.UpdatedAt,
 	}
+}
+
+// emptyJSONObject 把空字符串落库为 {}，与列默认值一致。
+func emptyJSONObject(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "{}"
+	}
+	return raw
 }
 
 func toDomainPaymentOrder(item model.PaymentOrder) domainbilling.PaymentOrder {

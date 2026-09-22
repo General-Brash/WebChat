@@ -18,7 +18,7 @@ import (
 
 // CreateUserRequest 管理员创建用户请求。
 type CreateUserRequest struct {
-	Username              string     `json:"username" binding:"required,min=3,max=16"`
+	Username              string     `json:"username" binding:"required,min=3,max=32"`
 	Password              string     `json:"password" binding:"required,min=8,max=128"`
 	AvatarURL             string     `json:"avatarURL,omitempty" binding:"max=2048"`
 	DisplayName           string     `json:"displayName,omitempty" binding:"omitempty,min=3,max=16"`

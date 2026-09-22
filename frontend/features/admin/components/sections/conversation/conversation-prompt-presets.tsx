@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Box, FileBox, Plus, Save, Trash2 } from "lucide-react";
+import { Box, FileBox, LayoutGrid, Plus, Save, Trash2 } from "lucide-react";
 import { useLocale } from "next-intl";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
@@ -24,6 +24,7 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
+  DialogHeightTransition,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -49,11 +50,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { useVirtualTableRows, VirtualTablePaddingRow } from "@/components/ui/virtual-table";
 import { listAdminSettingsByNamespace, patchAdminSettings } from "@/features/admin/api";
 import { useAdminSkills } from "@/features/admin/hooks/use-admin-skills";
+import { useAdminUIComponents } from "@/features/admin/hooks/use-admin-ui-components";
 import { useAdminPromptPresets } from "@/features/admin/hooks/use-admin-prompt-presets";
 import { resolveAdminErrorMessage } from "@/features/admin/utils/admin-error";
 import { formatDateTime } from "@/features/admin/utils/account-display";
 import type { PromptPresetDTO } from "@/shared/api/prompt-presets.types";
 import type { SkillDTO } from "@/shared/api/skills.types";
+import type { UIComponentDTO } from "@/shared/api/ui-components.types";
+import { UIComponentEditorDialog } from "@/shared/components/ui-component-editor-dialog";
 import type { PatchSettingItem } from "@/shared/api/settings.types";
 import { resolveAccessToken } from "@/shared/auth/resolve-access-token";
 import {
@@ -65,7 +69,7 @@ import { PROMPT_PRESET_LIMITS } from "@/shared/model/prompt-presets";
 import { SKILL_LIMITS } from "@/shared/model/skills";
 
 const PROMPT_PRESET_TABLE_COLUMN_COUNT = 6;
-type PromptLibraryType = "prompts" | "skills";
+type PromptLibraryType = "prompts" | "skills" | "components";
 
 type PromptLibraryRow = {
   id: number;
@@ -76,6 +80,21 @@ type PromptLibraryRow = {
   createdAt: string;
   updatedAt: string;
 };
+
+type UIComponentRow = PromptLibraryRow & { component: UIComponentDTO };
+
+function toUIComponentRow(item: UIComponentDTO): UIComponentRow {
+  return {
+    id: item.id,
+    title: item.name,
+    trigger: item.name,
+    description: item.description,
+    enabled: item.enabled,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+    component: item,
+  };
+}
 
 function SkillsPromptSettings({
   action,
@@ -239,14 +258,19 @@ export function ConversationPromptPresetsSection() {
   const [skillsPromptSaving, setSkillsPromptSaving] = React.useState(false);
   const prompts = useAdminPromptPresets();
   const skills = useAdminSkills();
-  const activeLoading = activeType === "skills" ? skills.loading : prompts.loading;
-  const activeQuery = activeType === "skills" ? skills.query : prompts.query;
-  const activePage = activeType === "skills" ? skills.page : prompts.page;
-  const activePageCount = activeType === "skills" ? skills.pageCount : prompts.pageCount;
-  const activePageSize = activeType === "skills" ? skills.pageSize : prompts.pageSize;
-  const activeTotal = activeType === "skills" ? skills.total : prompts.total;
-  const activeSearchPlaceholder = activeType === "skills" ? t("skillsSearchPlaceholder") : t("searchPlaceholder");
-  const activeCreateLabel = activeType === "skills" ? t("createSkill") : t("create");
+  const components = useAdminUIComponents();
+  const uiT = useTranslations("uiComponents");
+  const active = activeType === "skills" ? skills : activeType === "components" ? components : prompts;
+  const activeLoading = active.loading;
+  const activeQuery = active.query;
+  const activePage = active.page;
+  const activePageCount = active.pageCount;
+  const activePageSize = active.pageSize;
+  const activeTotal = active.total;
+  const activeSearchPlaceholder =
+    activeType === "skills" ? t("skillsSearchPlaceholder") : activeType === "components" ? uiT("searchPlaceholder") : t("searchPlaceholder");
+  const activeCreateLabel = activeType === "skills" ? t("createSkill") : activeType === "components" ? uiT("create") : t("create");
+  const componentRows = React.useMemo(() => components.items.map(toUIComponentRow), [components.items]);
   const skillsPromptDirty = skillsPromptValue !== savedSkillsPromptValue;
 
   React.useEffect(() => {
@@ -330,6 +354,7 @@ export function ConversationPromptPresetsSection() {
       <TabsList>
         <TabsTrigger value="skills">{t("types.skills")}</TabsTrigger>
         <TabsTrigger value="prompts">{t("types.prompts")}</TabsTrigger>
+        <TabsTrigger value="components">{uiT("types.components")}</TabsTrigger>
       </TabsList>
     </Tabs>
   );
@@ -351,22 +376,22 @@ export function ConversationPromptPresetsSection() {
           <div className="space-y-2">
             <div className="px-0.5">
               <p className="text-xs font-medium leading-snug text-foreground/80">
-                {activeType === "skills" ? t("libraryTitle.skills") : t("libraryTitle.prompts")}
+                {activeType === "skills" ? t("libraryTitle.skills") : activeType === "components" ? uiT("libraryTitle") : t("libraryTitle.prompts")}
               </p>
             </div>
 
             <TableToolbar
               query={activeQuery}
               queryPlaceholder={activeSearchPlaceholder}
-              onQueryChange={activeType === "skills" ? skills.setQuery : prompts.setQuery}
+              onQueryChange={active.setQuery}
               loading={activeLoading}
-              onRefresh={() => void (activeType === "skills" ? skills.load() : prompts.load())}
+              onRefresh={() => void active.load()}
             >
               <Button
                 type="button"
                 size="sm"
                 className="h-7 gap-1 text-xs"
-                onClick={activeType === "skills" ? skills.openCreate : prompts.openCreate}
+                onClick={active.openCreate}
                 disabled={activeLoading}
               >
                 <Plus className="size-3.5 stroke-1" />
@@ -375,7 +400,18 @@ export function ConversationPromptPresetsSection() {
             </TableToolbar>
           </div>
 
-          {activeType === "skills" ? (
+          {activeType === "components" ? (
+            <PromptLibraryTable<UIComponentRow>
+              emptyLabel={uiT("empty")}
+              getSummary={(item) => item.description}
+              icon={LayoutGrid}
+              items={componentRows}
+              loading={components.loading}
+              onEdit={(row) => components.openEdit(row.component)}
+              onDelete={(row) => components.setDeleteTarget(row.component)}
+              onEnabledChange={(row, checked) => void components.toggleEnabled(row.component, checked)}
+            />
+          ) : activeType === "skills" ? (
             <PromptLibraryTable<SkillDTO>
               emptyLabel={t("skillsEmpty")}
               getSummary={(item: SkillDTO) => item.description || item.markdown}
@@ -404,116 +440,120 @@ export function ConversationPromptPresetsSection() {
             pageCount={activePageCount}
             pageSize={activePageSize}
             total={activeTotal}
-            onPageChange={activeType === "skills" ? skills.setPage : prompts.setPage}
-            onPageSizeChange={activeType === "skills" ? skills.setPageSize : prompts.setPageSize}
+            onPageChange={active.setPage}
+            onPageSizeChange={active.setPageSize}
             loading={activeLoading}
           />
         </div>
       </SettingsSection>
 
       <Dialog open={prompts.dialogOpen} onOpenChange={(open) => !prompts.saving && prompts.setDialogOpen(open)}>
-        <DialogContent className="flex max-h-[min(86vh,760px)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[560px]">
-          <DialogHeader className="shrink-0 px-5 pb-3 pt-5">
-            <DialogTitle>{prompts.form.id ? t("editTitle") : t("createTitle")}</DialogTitle>
-            <DialogDescription>{t("dialogDescription")}</DialogDescription>
-          </DialogHeader>
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-2">
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">{t("fields.name")}</p>
-              <InputGroup>
-                <InputGroupAddon>/</InputGroupAddon>
-                <InputGroupInput
-                  value={prompts.form.name}
-                  placeholder="musk"
-                  maxLength={PROMPT_PRESET_LIMITS.name}
-                  onChange={(event) => prompts.setForm((current) => ({ ...current, name: event.target.value }))}
+        <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-[560px]">
+          <DialogHeightTransition contentClassName="max-h-[min(86vh,760px)]">
+            <DialogHeader className="shrink-0 px-5 pb-3 pt-5">
+              <DialogTitle>{prompts.form.id ? t("editTitle") : t("createTitle")}</DialogTitle>
+              <DialogDescription>{t("dialogDescription")}</DialogDescription>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-2">
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{t("fields.name")}</p>
+                <InputGroup>
+                  <InputGroupAddon>/</InputGroupAddon>
+                  <InputGroupInput
+                    value={prompts.form.name}
+                    placeholder="musk"
+                    maxLength={PROMPT_PRESET_LIMITS.name}
+                    onChange={(event) => prompts.setForm((current) => ({ ...current, name: event.target.value }))}
+                  />
+                </InputGroup>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{t("fields.description")}</p>
+                <Input
+                  value={prompts.form.description}
+                  maxLength={PROMPT_PRESET_LIMITS.description}
+                  onChange={(event) => prompts.setForm((current) => ({ ...current, description: event.target.value }))}
                 />
-              </InputGroup>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{t("fields.content")}</p>
+                <Textarea
+                  value={prompts.form.content}
+                  className="h-64 resize-none overflow-y-auto [field-sizing:fixed]"
+                  maxLength={PROMPT_PRESET_LIMITS.content}
+                  onChange={(event) => prompts.setForm((current) => ({ ...current, content: event.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{t("fields.enabled")}</p>
+                <Switch
+                  size="sm"
+                  checked={prompts.form.enabled}
+                  disabled={prompts.saving}
+                  onCheckedChange={(enabled) => prompts.setForm((current) => ({ ...current, enabled }))}
+                />
+              </div>
             </div>
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">{t("fields.description")}</p>
-              <Input
-                value={prompts.form.description}
-                maxLength={PROMPT_PRESET_LIMITS.description}
-                onChange={(event) => prompts.setForm((current) => ({ ...current, description: event.target.value }))}
-              />
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">{t("fields.content")}</p>
-              <Textarea
-                value={prompts.form.content}
-                className="h-64 resize-none overflow-y-auto [field-sizing:fixed]"
-                maxLength={PROMPT_PRESET_LIMITS.content}
-                onChange={(event) => prompts.setForm((current) => ({ ...current, content: event.target.value }))}
-              />
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">{t("fields.enabled")}</p>
-              <Switch
-                size="sm"
-                checked={prompts.form.enabled}
-                disabled={prompts.saving}
-                onCheckedChange={(enabled) => prompts.setForm((current) => ({ ...current, enabled }))}
-              />
-            </div>
-          </div>
-          <DialogFooter className="shrink-0 px-5 py-3">
-            <Button variant="ghost" disabled={prompts.saving} onClick={() => prompts.setDialogOpen(false)}>{t("cancel")}</Button>
-            <Button disabled={prompts.saving} onClick={() => void prompts.save()}>{prompts.saving ? t("saving") : t("save")}</Button>
-          </DialogFooter>
+            <DialogFooter className="shrink-0 px-5 py-3">
+              <Button variant="ghost" disabled={prompts.saving} onClick={() => prompts.setDialogOpen(false)}>{t("cancel")}</Button>
+              <Button disabled={prompts.saving} onClick={() => void prompts.save()}>{prompts.saving ? t("saving") : t("save")}</Button>
+            </DialogFooter>
+          </DialogHeightTransition>
         </DialogContent>
       </Dialog>
 
       <Dialog open={skills.dialogOpen} onOpenChange={(open) => !skills.saving && skills.setDialogOpen(open)}>
-        <DialogContent className="flex max-h-[min(86vh,760px)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[560px]">
-          <DialogHeader className="shrink-0 px-5 pb-3 pt-5">
-            <DialogTitle>{skills.form.id ? t("editSkillTitle") : t("createSkillTitle")}</DialogTitle>
-            <DialogDescription>{t("skillDialogDescription")}</DialogDescription>
-          </DialogHeader>
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-2">
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">{t("fields.name")}</p>
-              <InputGroup>
-                <InputGroupAddon>/</InputGroupAddon>
-                <InputGroupInput
-                  value={skills.form.name}
-                  placeholder="review"
-                  maxLength={SKILL_LIMITS.name}
-                  onChange={(event) => skills.setForm((current) => ({ ...current, name: event.target.value }))}
+        <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-[560px]">
+          <DialogHeightTransition contentClassName="max-h-[min(86vh,760px)]">
+            <DialogHeader className="shrink-0 px-5 pb-3 pt-5">
+              <DialogTitle>{skills.form.id ? t("editSkillTitle") : t("createSkillTitle")}</DialogTitle>
+              <DialogDescription>{t("skillDialogDescription")}</DialogDescription>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-2">
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{t("fields.name")}</p>
+                <InputGroup>
+                  <InputGroupAddon>/</InputGroupAddon>
+                  <InputGroupInput
+                    value={skills.form.name}
+                    placeholder="review"
+                    maxLength={SKILL_LIMITS.name}
+                    onChange={(event) => skills.setForm((current) => ({ ...current, name: event.target.value }))}
+                  />
+                </InputGroup>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{t("fields.description")}</p>
+                <Input
+                  value={skills.form.description}
+                  maxLength={SKILL_LIMITS.description}
+                  onChange={(event) => skills.setForm((current) => ({ ...current, description: event.target.value }))}
                 />
-              </InputGroup>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{t("fields.skillMarkdown")}</p>
+                <Textarea
+                  value={skills.form.markdown}
+                  className="h-64 resize-none overflow-y-auto [field-sizing:fixed]"
+                  maxLength={SKILL_LIMITS.markdown}
+                  onChange={(event) => skills.setForm((current) => ({ ...current, markdown: event.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">{t("fields.enabled")}</p>
+                <Switch
+                  size="sm"
+                  checked={skills.form.enabled}
+                  disabled={skills.saving}
+                  onCheckedChange={(enabled) => skills.setForm((current) => ({ ...current, enabled }))}
+                />
+              </div>
             </div>
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">{t("fields.description")}</p>
-              <Input
-                value={skills.form.description}
-                maxLength={SKILL_LIMITS.description}
-                onChange={(event) => skills.setForm((current) => ({ ...current, description: event.target.value }))}
-              />
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">{t("fields.skillMarkdown")}</p>
-              <Textarea
-                value={skills.form.markdown}
-                className="h-64 resize-none overflow-y-auto [field-sizing:fixed]"
-                maxLength={SKILL_LIMITS.markdown}
-                onChange={(event) => skills.setForm((current) => ({ ...current, markdown: event.target.value }))}
-              />
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">{t("fields.enabled")}</p>
-              <Switch
-                size="sm"
-                checked={skills.form.enabled}
-                disabled={skills.saving}
-                onCheckedChange={(enabled) => skills.setForm((current) => ({ ...current, enabled }))}
-              />
-            </div>
-          </div>
-          <DialogFooter className="shrink-0 px-5 py-3">
-            <Button variant="ghost" disabled={skills.saving} onClick={() => skills.setDialogOpen(false)}>{t("cancel")}</Button>
-            <Button disabled={skills.saving} onClick={() => void skills.save()}>{skills.saving ? t("saving") : t("save")}</Button>
-          </DialogFooter>
+            <DialogFooter className="shrink-0 px-5 py-3">
+              <Button variant="ghost" disabled={skills.saving} onClick={() => skills.setDialogOpen(false)}>{t("cancel")}</Button>
+              <Button disabled={skills.saving} onClick={() => void skills.save()}>{skills.saving ? t("saving") : t("save")}</Button>
+            </DialogFooter>
+          </DialogHeightTransition>
         </DialogContent>
       </Dialog>
 
@@ -526,6 +566,29 @@ export function ConversationPromptPresetsSection() {
           <AlertDialogFooter>
             <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
             <AlertDialogAction onClick={() => void prompts.confirmDelete()}>{t("delete")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <UIComponentEditorDialog
+        key={components.form.id ?? "new"}
+        open={components.dialogOpen}
+        saving={components.saving}
+        form={components.form}
+        onOpenChange={components.setDialogOpen}
+        onFormChange={components.setForm}
+        onSave={() => void components.save()}
+      />
+
+      <AlertDialog open={components.deleteTarget !== null} onOpenChange={(open) => !open && components.setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{uiT("deleteTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{uiT("deleteDescription")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void components.confirmDelete()}>{t("delete")}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

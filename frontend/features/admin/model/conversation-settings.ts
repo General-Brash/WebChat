@@ -15,6 +15,7 @@ export type ConversationSettingsField = {
     | "conversation_default_model"
     | "conversation_task_model"
     | "default_system_prompt"
+    | "ui_components_enabled"
     | "conversation_title_prompt"
     | "conversation_labels_prompt"
     | "context_compact_enabled"
@@ -76,16 +77,6 @@ export const DEFAULT_MODEL_OPTION_ALLOWED_PATHS = `{
     "presence_penalty",
     "frequency_penalty",
     "reasoning_effort",
-    "verbosity",
-    "thinking.type",
-    "stream_options.include_usage"
-  ],
-  "openrouter_chat_completions": [
-    "presence_penalty",
-    "frequency_penalty",
-    "reasoning_effort",
-    "reasoning.effort",
-    "reasoning.summary",
     "verbosity",
     "thinking.type",
     "stream_options.include_usage"
@@ -181,6 +172,33 @@ export const DEFAULT_MODEL_OPTION_ALLOWED_PATHS = `{
   ],
   "xai_video_extensions": [
     "duration"
+  ],
+  "openrouter_chat_completions": [
+    "presence_penalty",
+    "frequency_penalty",
+    "reasoning_effort",
+    "reasoning.effort",
+    "reasoning.summary",
+    "verbosity",
+    "thinking.type",
+    "stream_options.include_usage"
+  ],
+  "openrouter_images": [
+    "aspect_ratio",
+    "background",
+    "n",
+    "output_compression",
+    "output_format",
+    "provider.allow_fallbacks",
+    "provider.ignore",
+    "provider.only",
+    "provider.order",
+    "provider.sort",
+    "quality",
+    "resolution",
+    "seed",
+    "size",
+    "user"
   ]
 }`;
 
@@ -282,6 +300,14 @@ export function buildConversationSettingsFields(t: ConversationSettingsTranslato
       description: t("fields.defaultSystemPrompt.description"),
       type: "textarea",
       placeholder: t("fields.defaultSystemPrompt.placeholder"),
+    },
+    {
+      section: "conversation",
+      namespace: "chat",
+      key: "ui_components_enabled",
+      label: t("fields.uiComponentsEnabled.label"),
+      description: t("fields.uiComponentsEnabled.description"),
+      type: "bool",
     },
     {
       section: "contextManagement",

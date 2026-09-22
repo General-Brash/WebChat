@@ -349,7 +349,7 @@ type PatchMeRequest struct {
 
 // PatchUsernameRequest contains the requested username.
 type PatchUsernameRequest struct {
-	Username string `json:"username" binding:"required,min=3,max=16"`
+	Username string `json:"username" binding:"required,min=3,max=32"`
 }
 
 // UpdateCurrentSessionLocationRequest 更新当前会话的精确位置请求。

@@ -5,7 +5,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { mapServerMessage } from "@/features/chat/model/chat-thread";
-import { toPendingProcessTrace } from "@/features/chat/model/message-submit";
+import { mergeProcessTraceSnapshot, toPendingProcessTrace } from "@/features/chat/model/message-submit";
 import {
   clearLiveUpstreamThinkTrace,
   upsertLiveUpstreamThinkTrace,
@@ -59,6 +59,7 @@ type TemporaryChatRuntimeInput = {
   selectedToolIDs: number[];
   selectedSkillIDs: number[];
   selectedKnowledgeBaseIDs: string[];
+  uiComponentIDs: number[];
   htmlVisualPromptEnabled: boolean;
   attachments: PendingAttachment[];
   onDraftChange: (value: string) => void;
@@ -168,6 +169,7 @@ export function useChatTemporaryRuntime({
   selectedToolIDs,
   selectedSkillIDs,
   selectedKnowledgeBaseIDs,
+  uiComponentIDs,
   htmlVisualPromptEnabled,
   attachments,
   onDraftChange,
@@ -406,6 +408,7 @@ export function useChatTemporaryRuntime({
           skillIDs: selectedSkillIDs.length > 0 ? selectedSkillIDs : undefined,
           knowledgeBaseIDs: selectedKnowledgeBaseIDs.length > 0 ? selectedKnowledgeBaseIDs : undefined,
           htmlVisualPrompt: htmlVisualPromptEnabled || undefined,
+          uiComponentIDs: uiComponentIDs.length > 0 ? uiComponentIDs : undefined,
           messages: preparedRequest.messages,
         },
         {
@@ -426,7 +429,7 @@ export function useChatTemporaryRuntime({
               ...message,
               activityLabel: undefined,
               processTrace: event.trace
-                ? toPendingProcessTrace(event.trace)
+                ? mergeProcessTraceSnapshot(message.processTrace, toPendingProcessTrace(event.trace))
                 : message.processTrace,
             }));
           },
@@ -536,6 +539,7 @@ export function useChatTemporaryRuntime({
     replaceMessageTail,
     replaceMessages,
     selectedKnowledgeBaseIDs,
+    uiComponentIDs,
     selectedSkillIDs,
     selectedToolIDs,
     t,

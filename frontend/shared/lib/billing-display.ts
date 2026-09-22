@@ -1,3 +1,5 @@
+import type { PublicModelPricingDTO } from "@/shared/api/model.types";
+
 export type BillingCacheWriteSnapshot = {
   provider_protocol?: string;
   cache_timeout?: string;
@@ -5,8 +7,12 @@ export type BillingCacheWriteSnapshot = {
   billing_speed?: string;
   billing_service_tier?: string;
   rate_multiplier?: number;
+  schedule_period_name?: string;
+  schedule_rate_percent?: number;
   cache_write_5m_tokens?: number;
   cache_write_1h_tokens?: number;
+  cache_write_5m_multiplier?: number;
+  cache_write_1h_multiplier?: number;
 };
 
 export type BillingDisplayLabels = {
@@ -18,6 +24,7 @@ export type BillingDisplayLabels = {
   claudeCacheWriteNote: (timeout: "5m" | "1h", multiplier: string) => string;
   claudeFastModeNote: (multiplier: string) => string;
   openaiServiceTierNote: (tier: string, multiplier: string) => string;
+  scheduleRateNote: (period: string, multiplier: string) => string;
   cacheWritePricingLabel: string;
   cacheWritePricingNote: string;
 };
@@ -38,6 +45,7 @@ const DEFAULT_BILLING_DISPLAY_LABELS: BillingDisplayLabels = {
   claudeCacheWriteNote: (timeout, multiplier) => `Claude ${timeout} cache write uses configured pricing at ${multiplier}`,
   claudeFastModeNote: (multiplier) => `Claude Fast Mode bills input, output, and cache usage at ${multiplier}`,
   openaiServiceTierNote: (tier, multiplier) => `OpenAI service_tier=${tier} bills at ${multiplier}`,
+  scheduleRateNote: (period, multiplier) => `Time-of-day rate "${period}" applies ${multiplier}`,
   cacheWritePricingLabel: "Cache write 5m",
   cacheWritePricingNote: "Claude cache read uses configured pricing; cache write 5m uses 1.25x, 1h uses 2x, and Fast Mode applies another 6x on top.",
 };
@@ -162,7 +170,10 @@ export function cacheWriteBillingNote(snapshot: BillingCacheWriteSnapshot, label
   }
   const mixedCacheWrite = (snapshot.cache_write_5m_tokens || 0) > 0 && (snapshot.cache_write_1h_tokens || 0) > 0;
   const timeout = anthropicCacheTimeoutLabel(snapshot);
-  const multiplier = mixedCacheWrite ? "5m 1.25x, 1h 2x" : timeout === "1h" ? "2x" : "1.25x";
+  // Snapshots without explicit multipliers predate imported cache price bases.
+  const fiveMinutes = formatRateMultiplier(snapshot.cache_write_5m_multiplier ?? 1.25);
+  const oneHour = formatRateMultiplier(snapshot.cache_write_1h_multiplier ?? 2);
+  const multiplier = mixedCacheWrite ? `5m ${fiveMinutes}, 1h ${oneHour}` : timeout === "1h" ? oneHour : fiveMinutes;
   return mixedCacheWrite ? labels.claudeCacheWriteMixedNote(multiplier) : labels.claudeCacheWriteNote(timeout, multiplier);
 }
 
@@ -183,21 +194,40 @@ export function billingRateMultiplierNote(snapshot: BillingCacheWriteSnapshot, l
   return null;
 }
 
-function formatRateMultiplier(value: number): string {
-  return Number.isInteger(value) ? `${value}x` : `${value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}x`;
+// Rate multipliers always read as "1.20x" / "2.00x" so columns of them line up.
+export function formatRateMultiplier(value: number): string {
+  return `${(Number.isFinite(value) ? value : 1).toFixed(2)}x`;
+}
+
+// The time-of-day period recorded in the ledger snapshot, if one applied.
+export function billingScheduleNote(snapshot: BillingCacheWriteSnapshot, labels: BillingDisplayLabels = DEFAULT_BILLING_DISPLAY_LABELS): string | null {
+  const period = String(snapshot.schedule_period_name || "").trim();
+  const percent = Number(snapshot.schedule_rate_percent || 0);
+  if (!period || !Number.isFinite(percent) || percent <= 0) {
+    return null;
+  }
+  return labels.scheduleRateNote(period, formatRateMultiplier(percent / 100));
 }
 
 export function cacheWritePricingLabel(protocols: readonly string[] | null | undefined, labels: BillingDisplayLabels = DEFAULT_BILLING_DISPLAY_LABELS): string {
   return hasAnthropicMessagesProtocol(protocols) ? labels.cacheWritePricingLabel : labels.cacheWrite;
 }
 
-export function cacheWritePricingNote(protocols: readonly string[] | null | undefined, labels: BillingDisplayLabels = DEFAULT_BILLING_DISPLAY_LABELS): string | null {
-  return hasAnthropicMessagesProtocol(protocols) ? labels.cacheWritePricingNote : null;
+type CacheWritePricingMultipliers = Pick<PublicModelPricingDTO, "cacheWrite5mMultiplier" | "cacheWrite1hMultiplier">;
+
+export function cacheWritePricingNote(
+  protocols: readonly string[] | null | undefined,
+  pricing: CacheWritePricingMultipliers,
+  labels: BillingDisplayLabels = DEFAULT_BILLING_DISPLAY_LABELS,
+): string | null {
+  if (!hasAnthropicMessagesProtocol(protocols)) return null;
+  return labels.claudeCacheWriteMixedNote(`5m ${formatRateMultiplier(pricing.cacheWrite5mMultiplier)}, 1h ${formatRateMultiplier(pricing.cacheWrite1hMultiplier)}`);
 }
 
 export function resolveCacheWritePricingUSD(
   protocols: readonly string[] | null | undefined,
   configuredCacheWriteUSDPerMTokens: number,
+  pricing: CacheWritePricingMultipliers,
   cacheTimeout: "5m" | "1h" = "5m",
 ): number {
   if (!hasAnthropicMessagesProtocol(protocols)) {
@@ -206,5 +236,6 @@ export function resolveCacheWritePricingUSD(
   if (!Number.isFinite(configuredCacheWriteUSDPerMTokens) || configuredCacheWriteUSDPerMTokens <= 0) {
     return 0;
   }
-  return cacheTimeout === "1h" ? configuredCacheWriteUSDPerMTokens * 2 : configuredCacheWriteUSDPerMTokens * 1.25;
+  const multiplier = cacheTimeout === "1h" ? pricing.cacheWrite1hMultiplier : pricing.cacheWrite5mMultiplier;
+  return configuredCacheWriteUSDPerMTokens * multiplier;
 }

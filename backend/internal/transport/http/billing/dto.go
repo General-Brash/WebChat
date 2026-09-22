@@ -40,10 +40,13 @@ type UpsertModelPricingRequest struct {
 	InputUSDPerMTokens      *float64 `json:"inputUSDPerMTokens" binding:"required,gte=0"`
 	CacheReadUSDPerMTokens  *float64 `json:"cacheReadUSDPerMTokens" binding:"required,gte=0"`
 	CacheWriteUSDPerMTokens *float64 `json:"cacheWriteUSDPerMTokens" binding:"required,gte=0"`
+	CacheWritePriceBasis    string   `json:"cacheWritePriceBasis,omitempty" binding:"omitempty,oneof=direct anthropic_5m" enums:"direct,anthropic_5m"`
 	OutputUSDPerMTokens     *float64 `json:"outputUSDPerMTokens" binding:"required,gte=0"`
 	CallUSDPerCall          *float64 `json:"callUSDPerCall" binding:"required,gte=0"`
 	DurationUSDPerSecond    *float64 `json:"durationUSDPerSecond" binding:"required,gte=0"`
 	TieredPricingJSON       string   `json:"tieredPricingJSON,omitempty" binding:"max=20000"`
+	// SchedulePricingJSON 是时段倍率配置 {"periods":[{"name","weekdays","start","end","ratePercent"}]}，空表示不启用。
+	SchedulePricingJSON string `json:"schedulePricingJSON,omitempty" binding:"max=20000"`
 }
 
 // BillingConfigRequest 保存计费全局配置。
@@ -469,10 +472,12 @@ type ModelPricingResponse struct {
 	InputUSDPerMTokens          float64   `json:"inputUSDPerMTokens"`
 	CacheReadUSDPerMTokens      float64   `json:"cacheReadUSDPerMTokens"`
 	CacheWriteUSDPerMTokens     float64   `json:"cacheWriteUSDPerMTokens"`
+	CacheWritePriceBasis        string    `json:"cacheWritePriceBasis,omitempty" enums:"direct,anthropic_5m"`
 	OutputUSDPerMTokens         float64   `json:"outputUSDPerMTokens"`
 	CallUSDPerCall              float64   `json:"callUSDPerCall"`
 	DurationUSDPerSecond        float64   `json:"durationUSDPerSecond"`
 	TieredPricingJSON           string    `json:"tieredPricingJSON"`
+	SchedulePricingJSON         string    `json:"schedulePricingJSON"`
 	InputNanousdPerMTokens      int64     `json:"inputNanousdPerMTokens"`
 	CacheReadNanousdPerMTokens  int64     `json:"cacheReadNanousdPerMTokens"`
 	CacheWriteNanousdPerMTokens int64     `json:"cacheWriteNanousdPerMTokens"`
@@ -500,6 +505,18 @@ type OpenRouterOfficialPricingItemResponse struct {
 
 // OpenRouterOfficialPricingUnitPricingResponse OpenRouter 官方模型价格字段。
 type OpenRouterOfficialPricingUnitPricingResponse struct {
+	Prompt               string                                      `json:"prompt"`
+	Completion           string                                      `json:"completion"`
+	InputCacheRead       string                                      `json:"inputCacheRead"`
+	InputCacheWrite      string                                      `json:"inputCacheWrite"`
+	CacheWritePriceBasis string                                      `json:"cacheWritePriceBasis" enums:"direct,anthropic_5m"`
+	Overrides            []OpenRouterOfficialPricingOverrideResponse `json:"overrides,omitempty"`
+	UnsupportedFields    []string                                    `json:"unsupportedFields,omitempty"`
+}
+
+// OpenRouterOfficialPricingOverrideResponse OpenRouter 官方模型输入 token 阶梯覆盖。
+type OpenRouterOfficialPricingOverrideResponse struct {
+	MinPromptTokens int64  `json:"minPromptTokens"`
 	Prompt          string `json:"prompt"`
 	Completion      string `json:"completion"`
 	InputCacheRead  string `json:"inputCacheRead"`
@@ -1132,10 +1149,12 @@ func toModelPricingResponse(item appbilling.ModelPricingView) ModelPricingRespon
 		InputUSDPerMTokens:          nanousdToUSD(item.InputNanousdPerMTokens),
 		CacheReadUSDPerMTokens:      nanousdToUSD(item.CacheReadNanousdPerMTokens),
 		CacheWriteUSDPerMTokens:     nanousdToUSD(item.CacheWriteNanousdPerMTokens),
+		CacheWritePriceBasis:        item.CacheWritePriceBasis,
 		OutputUSDPerMTokens:         nanousdToUSD(item.OutputNanousdPerMTokens),
 		CallUSDPerCall:              nanousdToUSD(item.CallNanousdPerCall),
 		DurationUSDPerSecond:        nanousdToUSD(item.DurationNanousdPerSecond),
 		TieredPricingJSON:           item.TieredPricingJSON,
+		SchedulePricingJSON:         item.SchedulePricingJSON,
 		InputNanousdPerMTokens:      item.InputNanousdPerMTokens,
 		CacheReadNanousdPerMTokens:  item.CacheReadNanousdPerMTokens,
 		CacheWriteNanousdPerMTokens: item.CacheWriteNanousdPerMTokens,
@@ -1156,10 +1175,12 @@ func modelPricingInputFromRequest(req UpsertModelPricingRequest) appbilling.Mode
 		InputNanousdPerMTokens:      usdToNanousd(*req.InputUSDPerMTokens),
 		CacheReadNanousdPerMTokens:  usdToNanousd(*req.CacheReadUSDPerMTokens),
 		CacheWriteNanousdPerMTokens: usdToNanousd(*req.CacheWriteUSDPerMTokens),
+		CacheWritePriceBasis:        req.CacheWritePriceBasis,
 		OutputNanousdPerMTokens:     usdToNanousd(*req.OutputUSDPerMTokens),
 		CallNanousdPerCall:          usdToNanousd(*req.CallUSDPerCall),
 		DurationNanousdPerSecond:    usdToNanousd(*req.DurationUSDPerSecond),
 		TieredPricingJSON:           req.TieredPricingJSON,
+		SchedulePricingJSON:         req.SchedulePricingJSON,
 	}
 }
 
